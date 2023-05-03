@@ -3,7 +3,7 @@ Spring 23',Industrial Project 1(CAPSTONE Design) - ALIVE - ML Repository
 
 ## Repository Structure
 
-- Main branch : Lip-reading using Temporal Convolutional Networks based codeline.
+- Main branch :Codes from Lip-reading using Temporal Convolutional Networks.
 
 ## Team Members
 - DL
