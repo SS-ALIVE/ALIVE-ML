@@ -76,7 +76,7 @@ def load_args(default_config=None):
     parser.add_argument('--mouth-patch-path', type=str, default=None, help='Path to the mouth ROIs, assuming the file is saved as numpy.array')
     parser.add_argument('--mouth-embedding-out-path', type=str, default=None, help='Save mouth embeddings to a specificed path')
     # -- json pathname
-    parser.add_argument('--config-path', type=str, default=None, help='Model configuration with json format')
+    parser.add_argument('--config-path', type=str, default="./configs/lrw_resnet18_dctcn.json", help='Model configuration with json format')
     # -- other vars
     parser.add_argument('--interval', default=50, type=int, help='display interval')
     parser.add_argument('--workers', default=8, type=int, help='number of data loading workers')
@@ -166,6 +166,7 @@ def train(model, dset_loader, criterion, epoch, optimizer, logger):
         optimizer.zero_grad()
 
         logits = model(input.unsqueeze(1).cuda(), lengths=lengths, boundaries=boundaries)
+        print(logits)
 
         loss_func = mixup_criterion(labels_a, labels_b, lam)
         loss = loss_func(criterion, logits)
