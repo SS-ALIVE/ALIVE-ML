@@ -8,3 +8,7 @@ __pycache__/
 *.pth
 datasets/outputs
 .DS_Store
+*.mp4
+*.text
+*.wav
+*.npz
