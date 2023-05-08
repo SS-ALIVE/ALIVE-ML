@@ -12,3 +12,4 @@ datasets/outputs
 *.text
 *.wav
 *.npz
+*.txt
