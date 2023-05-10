@@ -21,7 +21,7 @@ class MyDataset(object):
         self._annonation_direc = annonation_direc
 
         self.fps = 25 if modality == "video" else 16000
-        self.is_var_length = True
+        self.is_var_length = True # set True to use annonation directory
         self.use_boundary = use_boundary
         self.label_idx = -3
 
@@ -46,7 +46,6 @@ class MyDataset(object):
         # -- add examples to self._data_files
         self._get_files_for_partition()
 
-
         # -- from self._data_files to self.list
         self.list = dict()
         self.instance_ids = dict()
@@ -59,11 +58,13 @@ class MyDataset(object):
 
     def _get_instance_id_from_path(self, x):
         # for now this works for npz/npys, might break for image folders
-        instance_id = x.split('/')[-1]
+        #changed / to \\ for windows
+        instance_id = x.split('\\')[-1]
         return os.path.splitext( instance_id )[0]
 
     def _get_label_from_path(self, x):
-        return x.split('/')[self.label_idx]
+        # changed / to \\ for windows
+        return x.split('\\')[self.label_idx]
 
     def _get_files_for_partition(self):
         # get rgb/mfcc file paths
@@ -72,16 +73,26 @@ class MyDataset(object):
         if not dir_fp:
             return
 
+ 
         # get npy/npz/mp4 files
         search_str_npz = os.path.join(dir_fp, '*', self._data_partition, '*.npz')
         search_str_npy = os.path.join(dir_fp, '*', self._data_partition, '*.npy')
         search_str_mp4 = os.path.join(dir_fp, '*', self._data_partition, '*.mp4')
+        
+        #replace \ with / - for windows
+        search_str_npz=search_str_npz.replace('/','\\')
+        search_str_npy=search_str_npy.replace('/','\\')
+        search_str_mp4=search_str_mp4.replace('/','\\')
+        #print(search_str_mp4,search_str_npy,search_str_npz)
+        
         self._data_files.extend( glob.glob( search_str_npz ) )
         self._data_files.extend( glob.glob( search_str_npy ) )
         self._data_files.extend( glob.glob( search_str_mp4 ) )
-
+        #print(self._data_files[10])
+        #print(glob.glob(os.path.join(self._data_dir,search_str_mp4)))
         # If we are not using the full set of labels, remove examples for labels not used
-        self._data_files = [ f for f in self._data_files if f.split('/')[self.label_idx] in self._labels ]
+        #changed / to \\ for windows
+        self._data_files = [ f for f in self._data_files if f.split('\\')[self.label_idx] in self._labels ]
 
     def load_data(self, filename):
 
