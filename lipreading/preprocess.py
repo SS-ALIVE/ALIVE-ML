@@ -106,6 +106,7 @@ class RandomCrop(object):
         Returns:
             numpy.ndarray: Cropped image.
         """
+        print(frames.shape)
         t, h, w = frames.shape
         th, tw = self.size
         delta_w = random.randint(0, w-tw)

@@ -13,7 +13,7 @@ def load_args(default_config=None):
     parser.add_argument('--filename-path', default='./lrw500_detected_face.csv', help='list of detected video and its subject ID')
     parser.add_argument('--save-direc', default=None, help='the directory of saving mouth ROIs')
     # -- convert to gray scale
-    parser.add_argument('--convert-gray', default=False, action='store_true', help='convert2grayscale')
+    parser.add_argument('--convert-gray', default=True, action='store_true', help='convert2grayscale')
     # -- test set only
     parser.add_argument('--testset-only', default=False, action='store_true', help='process testing set only')
 

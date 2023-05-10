@@ -166,7 +166,7 @@ def train(model, dset_loader, criterion, epoch, optimizer, logger):
         optimizer.zero_grad()
 
         logits = model(input.unsqueeze(1).cuda(), lengths=lengths, boundaries=boundaries)
-        print(logits)
+        #print(logits) #is model working properly?
 
         loss_func = mixup_criterion(labels_a, labels_b, lam)
         loss = loss_func(criterion, logits)

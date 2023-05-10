@@ -21,7 +21,7 @@ class MyDataset(object):
         self._annonation_direc = annonation_direc
 
         self.fps = 25 if modality == "video" else 16000
-        self.is_var_length = True # set True to use annonation directory
+        self.is_var_length = False # set True to use annonation directory
         self.use_boundary = use_boundary
         self.label_idx = -3
 
@@ -109,7 +109,7 @@ class MyDataset(object):
 
     def _apply_variable_length_aug(self, filename, raw_data):
         # read info txt file (to see duration of word, to be used to do temporal cropping)
-        info_txt = os.path.join(self._annonation_direc, *filename.split('/')[self.label_idx:] )  # swap base folder
+        info_txt = os.path.join(self._annonation_direc, *filename.split('\\')[self.label_idx:] )  # swap base folder, changed '/' to '\\' for windows
         info_txt = os.path.splitext( info_txt )[0] + '.txt'   # swap extension
         info = read_txt_lines(info_txt)  
 
@@ -126,7 +126,7 @@ class MyDataset(object):
 
     def _get_boundary(self, filename, raw_data):
         # read info txt file (to see duration of word, to be used to do temporal cropping)
-        info_txt = os.path.join(self._annonation_direc, *filename.split('/')[self.label_idx:] )  # swap base folder
+        info_txt = os.path.join(self._annonation_direc, *filename.split('\\')[self.label_idx:] )  # swap base folder, changed '/' to '\\' for windows
         info_txt = os.path.splitext( info_txt )[0] + '.txt'   # swap extension
         info = read_txt_lines(info_txt)
 
