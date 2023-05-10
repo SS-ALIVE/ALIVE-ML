@@ -95,7 +95,8 @@ torch.manual_seed(1)
 np.random.seed(1)
 random.seed(1)
 torch.backends.cudnn.benchmark = True
-
+# device detection - cuda or cpu
+device = torch.device("cuda:0" if torch.cuda.is_avilable() else "cpu")
 
 def extract_feats(model):
     """
@@ -104,7 +105,7 @@ def extract_feats(model):
     model.eval()
     preprocessing_func = get_preprocessing_pipelines()['test']
     data = preprocessing_func(np.load(args.mouth_patch_path)['data'])  # data: TxHxW
-    return model(torch.FloatTensor(data)[None, None, :, :, :].cuda(), lengths=[data.shape[0]])
+    return model(torch.FloatTensor(data)[None, None, :, :, :].to(device), lengths=[data.shape[0]])
 
 
 def evaluate(model, dset_loader, criterion):
@@ -118,15 +119,15 @@ def evaluate(model, dset_loader, criterion):
         for batch_idx, data in enumerate(tqdm(dset_loader)):
             if args.use_boundary:
                 input, lengths, labels, boundaries = data
-                boundaries = boundaries.cuda()
+                boundaries = boundaries.to(device)
             else:
                 input, lengths, labels = data
                 boundaries = None
-            logits = model(input.unsqueeze(1).cuda(), lengths=lengths, boundaries=boundaries)
+            logits = model(input.unsqueeze(1).to(device), lengths=lengths, boundaries=boundaries)
             _, preds = torch.max(F.softmax(logits, dim=1).data, dim=1)
-            running_corrects += preds.eq(labels.cuda().view_as(preds)).sum().item()
+            running_corrects += preds.eq(labels.to(device).view_as(preds)).sum().item()
 
-            loss = criterion(logits, labels.cuda())
+            loss = criterion(logits, labels.to(device))
             running_loss += loss.item() * input.size(0)
 
     print(f"{len(dset_loader.dataset)} in total\tCR: {running_corrects/len(dset_loader.dataset)}")
@@ -152,7 +153,7 @@ def train(model, dset_loader, criterion, epoch, optimizer, logger):
     for batch_idx, data in enumerate(dset_loader):
         if args.use_boundary:
             input, lengths, labels, boundaries = data
-            boundaries = boundaries.cuda()
+            boundaries = boundaries.to(device)
         else:
             input, lengths, labels = data
             boundaries = None
@@ -161,11 +162,11 @@ def train(model, dset_loader, criterion, epoch, optimizer, logger):
 
         # --
         input, labels_a, labels_b, lam = mixup_data(input, labels, args.alpha)
-        labels_a, labels_b = labels_a.cuda(), labels_b.cuda()
+        labels_a, labels_b = labels_a.to(device), labels_b.to(device)
 
         optimizer.zero_grad()
 
-        logits = model(input.unsqueeze(1).cuda(), lengths=lengths, boundaries=boundaries)
+        logits = model(input.unsqueeze(1).to(device), lengths=lengths, boundaries=boundaries)
         #print(logits) #is model working properly?
 
         loss_func = mixup_criterion(labels_a, labels_b, lam)
@@ -227,7 +228,7 @@ def get_model_from_json():
                         relu_type=args.relu_type,
                         width_mult=args.width_mult,
                         use_boundary=args.use_boundary,
-                        extract_feats=args.extract_feats).cuda()
+                        extract_feats=args.extract_feats)
     calculateNorm2(model)
     return model
 
@@ -240,8 +241,17 @@ def main():
     logger = get_logger(args, save_path)
     ckpt_saver = CheckpointSaver(save_path)
 
+    
+        
+
     # -- get model
     model = get_model_from_json()
+
+    # -- check CUDA / Multiple device
+    if torch.cuda.device_count()>1:
+        model = nn.DataParallel(model)
+    
+    model.to(device)
     # -- get dataset iterators
     dset_loaders = get_data_loaders(args)
     # -- get loss function
