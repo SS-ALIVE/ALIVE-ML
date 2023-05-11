@@ -96,7 +96,7 @@ np.random.seed(1)
 random.seed(1)
 torch.backends.cudnn.benchmark = True
 # device detection - cuda or cpu
-device = torch.device("cuda:0" if torch.cuda.is_avilable() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def extract_feats(model):
     """
@@ -123,6 +123,9 @@ def evaluate(model, dset_loader, criterion):
             else:
                 input, lengths, labels = data
                 boundaries = None
+            # for multiple gpus
+            lengths = lengths[0]*len(lengths)//(torch.cuda.device_count())
+
             logits = model(input.unsqueeze(1).to(device), lengths=lengths, boundaries=boundaries)
             _, preds = torch.max(F.softmax(logits, dim=1).data, dim=1)
             running_corrects += preds.eq(labels.to(device).view_as(preds)).sum().item()
@@ -160,6 +163,8 @@ def train(model, dset_loader, criterion, epoch, optimizer, logger):
         # measure data loading time
         data_time.update(time.time() - end)
 
+        #train for multiple gpus
+        lengths = lengths[0]*len(lengths)//(torch.cuda.device_count())
         # --
         input, labels_a, labels_b, lam = mixup_data(input, labels, args.alpha)
         labels_a, labels_b = labels_a.to(device), labels_b.to(device)

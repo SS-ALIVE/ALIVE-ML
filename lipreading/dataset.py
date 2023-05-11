@@ -98,7 +98,7 @@ class MyDataset(object):
 
         try:
             if filename.endswith('npz'):
-                return np.squeeze(np.load(filename)['data'][:,:,:,0]) # temporal
+                return np.load(filename)['data'] # temporal
             elif filename.endswith('mp4'):
                 return librosa.load(filename, sr=16000)[0][-19456:]
             else:
