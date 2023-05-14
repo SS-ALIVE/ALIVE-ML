@@ -33,7 +33,7 @@ def load_args(default_config=None):
     # -- dataset config
     parser.add_argument('--dataset', default='lrw', help='dataset selection')
     parser.add_argument('--num-classes', type=int, default=500, help='Number of classes')
-    parser.add_argument('--modality', default='video', choices=['video', 'audio'], help='choose the modality')
+    parser.add_argument('--modality', default='video', choices=['video', 'audio','av'], help='choose the modality')
     # -- directory
     parser.add_argument('--data-dir', default='./datasets/LRW_h96w96_mouth_crop_gray', help='Loaded data directory')
     parser.add_argument('--label-path', type=str, default='./labels/500WordsSortedList.txt', help='Path to txt file with labels')
@@ -247,6 +247,8 @@ def main():
     ckpt_saver = CheckpointSaver(save_path)
 
     
+    dset_loaders = get_data_loaders(args) 
+    exit()
         
 
     # -- get model
@@ -258,7 +260,7 @@ def main():
     
     model.to(device)
     # -- get dataset iterators
-    dset_loaders = get_data_loaders(args)
+    
     # -- get loss function
     criterion = nn.CrossEntropyLoss()
     # -- get optimizer
