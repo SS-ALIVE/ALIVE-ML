@@ -18,3 +18,12 @@ mel_specs = mel_transform(temp)
 s2 = time.time() - s1
 print(s2)
 
+## visulization
+plt.figure(figsize=(10, 4))
+plt.imshow(torch.log(mel_specs), aspect='auto', origin='lower')
+plt.colorbar(format='%+2.0f dB')
+plt.title('Mel Spectrogram')
+plt.xlabel('Frames')
+plt.ylabel('Mel Filterbanks')
+plt.tight_layout()
+plt.show()

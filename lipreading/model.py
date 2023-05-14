@@ -351,8 +351,8 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
 
         self.mel_transform = transforms.MelSpectrogram(
                 sample_rate = 16000,
-                n_fft=400,
-                hop_length=640,
+                n_fft=1024,
+                hop_length=145,
                 n_mels=128
             )
 
@@ -362,17 +362,16 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
         self._initialize_weights_randomly()
 
 
-    def forward(self, audio_data, video_data, audio_lengths, video_lengths,audio_raw_data, boundaries=None):
+    def forward(self, audio_data, video_data, audio_lengths, video_lengths, boundaries=None):
         if self.modality == "av":
 
             # audio feature extraction
             # (B,1,18560)
             B, C, T = audio_data.size()
             ## mel-spectogram generation
-            # audio raw data = (B,18560),normalized tensor #TODO : must isolate mel-spectogram generation from forward computation
+            # audio_data = (B,18560),normalized tensor #TODO : must isolate mel-spectogram generation from forward computation
             
-            
-            mel_spec = self.mel_transform(audio_raw_data) # generated mel-spectogram
+            mel_spec = self.mel_transform(audio_data.squeeze()) # generated mel-spectogram
             #print(mel_spec.shape)
             ###
             
@@ -406,9 +405,11 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
             ## FCN layer - generates Mask to apply with original audio's mel-spectogram
             mask = self.FCN(ava_attention) ## reconstruct mel-spectogram mask with U-NET : (B,1664) -> (B,1,128,128)
             #mel-spectogram..
-            print("mask = ",mask.shape)
-            print("raw = ",mel_spec.shape)
-            out = torch.mul(mask,mel_spec) # element-wise multiplication (mask, original) - mel-spectogram
+            #print("mask = ",mask.shape)
+            #print("raw = ",mel_spec.shape)
+            mask = mask.squeeze()
+            out = torch.mul(mask,mel_spec[:,:,:128]) # element-wise multiplication (mask, original) - mel-spectogram
+            #print("out = ",out.shape)
         return out
 
 

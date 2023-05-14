@@ -369,7 +369,6 @@ def pad_packed_collate(batch):
         for idx in range(len(data_np)):
             boundaries_np[idx] = boundaries_tuple[idx]
         boundaries = torch.FloatTensor(boundaries_np).unsqueeze(-1)
-
     labels = torch.LongTensor(labels_tuple)
 
     if use_boundary:

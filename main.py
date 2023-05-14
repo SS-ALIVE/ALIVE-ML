@@ -16,6 +16,8 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import soundfile as sf
 
 from lipreading.utils import get_save_folder
 from lipreading.utils import load_json, save2npz
@@ -141,7 +143,8 @@ def evaluate(model, dset_loader, criterion):
     return running_corrects/len(dset_loader.dataset), running_loss/len(dset_loader.dataset)
 
 
-def test_train(model, dset_loader, criterion, epoch, optimizer, logger):
+##TODO need to implement multimodal evaluate function
+def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
     data_time = AverageMeter()
     batch_time = AverageMeter()
 
@@ -171,11 +174,24 @@ def test_train(model, dset_loader, criterion, epoch, optimizer, logger):
 
         # (32, 1, 29, 88, 88)
         # (32, 1, 18560)
+        sf.write('original_audio.wav',audio_data[0],16000) ##TODO need to erase this saving codes .
         audio_data = audio_data.unsqueeze(1).to(device)
         video_data = video_data.unsqueeze(1).to(device)
         audio_raw_data = audio_raw_data.to(device)
-        logits = model(audio_data,video_data, audio_lengths,video_lengths,audio_raw_data)
-        print("this should not be printed")
+        
+        logits = model(audio_data,video_data, audio_lengths,video_lengths)
+        print(logits) #is model working properly?
+        print(logits.shape)
+        torch.save(logits[0],'./masked_audio.pt') # save logit value to play.. ## TODO make function to sample masked & original sound file for testing.
+        plt.figure(figsize=(10, 4))
+        plt.imshow(torch.log(logits.detach().cpu()[0]), aspect='auto', origin='lower')
+        plt.colorbar(format='%+2.0f dB')
+        plt.title('Mel Spectrogram')
+        plt.xlabel('Frames')
+        plt.ylabel('Mel Filterbanks')
+        plt.tight_layout()
+        plt.savefig('./masked_mel.png')
+        exit()
         #print(logits) #is model working properly?
 
         loss_func = mixup_criterion(labels_a, labels_b, lam)
@@ -226,7 +242,7 @@ def train(model, dset_loader, criterion, epoch, optimizer, logger):
         data_time.update(time.time() - end)
 
         #train for multiple gpus
-        lengths = lengths[0]*len(lengths)//(torch.cuda.device_count())
+        lengths = [lengths[0]]*(len(lengths)//(torch.cuda.device_count()))
         # --
         input, labels_a, labels_b, lam = mixup_data(input, labels, args.alpha)
         labels_a, labels_b = labels_a.to(device), labels_b.to(device)
@@ -236,9 +252,6 @@ def train(model, dset_loader, criterion, epoch, optimizer, logger):
         # (32, 1, 29, 88, 88)
         # (32, 1, 18560)
         logits = model(input.unsqueeze(1).to(device), lengths=lengths, boundaries=boundaries)
-        print(logits) #is model working properly?
-        print(logits.shape)
-        exit()
         loss_func = mixup_criterion(labels_a, labels_b, lam) ## TODO : impelemetn loss function
         loss = loss_func(criterion, logits)
 
@@ -354,8 +367,8 @@ def main():
     model.to(device)
     print(device)
     # -- get dataset iterators
-    #dset_loaders = get_data_loaders(args) 
-    dset_loaders = unit_test_data_loader(args)
+    dset_loaders = get_data_loaders(args) 
+    #dset_loaders = unit_test_data_loader(args)
     # -- get loss function
     criterion = nn.CrossEntropyLoss() ## TODO : Implement STOI Loss function
     # -- get optimizer
@@ -393,8 +406,11 @@ def main():
     epoch = args.init_epoch
 
     while epoch < args.epochs:
-        #model = train(model, dset_loaders['train'], criterion, epoch, optimizer, logger) # optimize?
-        model = test_train(model,dset_loaders['train'],criterion,epoch,optimizer,logger)
+        if args.modality == "av":
+            model = multimodal_train(model,dset_loaders['train'],criterion,epoch,optimizer,logger) # avlipreading
+        else:
+            model = train(model, dset_loaders['train'], criterion, epoch, optimizer, logger) # optimize?
+        
         acc_avg_val, loss_avg_val = evaluate(model, dset_loaders['val'], criterion)
         logger.info(f"{'val'} Epoch:\t{epoch:2}\tLoss val: {loss_avg_val:.4f}\tAcc val:{acc_avg_val:.4f}, LR: {showLR(optimizer)}")
         # -- save checkpoint
