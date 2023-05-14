@@ -25,7 +25,7 @@ from lipreading.utils import showLR, calculateNorm2, AverageMeter
 from lipreading.model import Lipreading, AVLipreading
 from lipreading.mixup import mixup_data, mixup_criterion
 from lipreading.optim_utils import get_optimizer, CosineScheduler
-from lipreading.dataloaders import get_data_loaders, get_preprocessing_pipelines
+from lipreading.dataloaders import get_data_loaders, get_preprocessing_pipelines, unit_test_data_loader
 
 
 def load_args(default_config=None):
@@ -158,12 +158,13 @@ def test_train(model, dset_loader, criterion, epoch, optimizer, logger):
 
     end = time.time()
     for batch_idx, data in enumerate(dset_loader):
-        audio_data,video_data,audio_lengths,video_lengths = data
+        audio_data,video_data,audio_lengths,video_lengths,audio_raw_data = data
         # measure data loading time
         data_time.update(time.time() - end)
 
         #train for multiple gpus
-        #lengths = lengths[0]*len(lengths)//(torch.cuda.device_count())
+        audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(torch.cuda.device_count()))
+        video_lengths = [video_lengths[0]]*(len(video_lengths)//(torch.cuda.device_count()))
         # --
     
         optimizer.zero_grad()
@@ -172,7 +173,8 @@ def test_train(model, dset_loader, criterion, epoch, optimizer, logger):
         # (32, 1, 18560)
         audio_data = audio_data.unsqueeze(1).to(device)
         video_data = video_data.unsqueeze(1).to(device)
-        logits = model(audio_data,video_data, audio_lengths,video_lengths)
+        audio_raw_data = audio_raw_data.to(device)
+        logits = model(audio_data,video_data, audio_lengths,video_lengths,audio_raw_data)
         print("this should not be printed")
         #print(logits) #is model working properly?
 
@@ -234,9 +236,10 @@ def train(model, dset_loader, criterion, epoch, optimizer, logger):
         # (32, 1, 29, 88, 88)
         # (32, 1, 18560)
         logits = model(input.unsqueeze(1).to(device), lengths=lengths, boundaries=boundaries)
-        #print(logits) #is model working properly?
-
-        loss_func = mixup_criterion(labels_a, labels_b, lam)
+        print(logits) #is model working properly?
+        print(logits.shape)
+        exit()
+        loss_func = mixup_criterion(labels_a, labels_b, lam) ## TODO : impelemetn loss function
         loss = loss_func(criterion, logits)
 
         loss.backward()
@@ -327,6 +330,7 @@ def main():
     logger = get_logger(args, save_path)
     ckpt_saver = CheckpointSaver(save_path)
 
+    ## DATASET LOADER CHECK
     # dset_loaders = get_data_loaders(args) 
     # print("data loaded!,testing...")
     # for batch_idx, data in enumerate(dset_loaders['train']): 
@@ -334,6 +338,7 @@ def main():
     #     print(data[0].shape)
     #     print(data[1].shape)
     #     print(data[2])
+    #     print(data[4].shape)
     #     print(batch_idx)
     #     break 
     # print("data no problem, exit")
@@ -349,9 +354,10 @@ def main():
     model.to(device)
     print(device)
     # -- get dataset iterators
-    dset_loaders = get_data_loaders(args) 
+    #dset_loaders = get_data_loaders(args) 
+    dset_loaders = unit_test_data_loader(args)
     # -- get loss function
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss() ## TODO : Implement STOI Loss function
     # -- get optimizer
     optimizer = get_optimizer(args, optim_policies=model.parameters())
     # -- get learning rate scheduler

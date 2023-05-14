@@ -6,6 +6,7 @@ import librosa
 import numpy as np
 import sys
 from lipreading.utils import read_txt_lines
+from lipreading.preprocess import NormalizeUtterance
 
 
 class MyDataset(object):
@@ -334,12 +335,13 @@ class AVDataset(object): # dataset for multi-modal training
             video_data = video_raw_data
         audio_preprocess_data = self.audio_preprocessing_func(audio_data)
         video_preprocess_data = self.video_preprocessing_func(video_data)
+        audio_raw_data = NormalizeUtterance()(audio_raw_data)
         label = self.audio_list[idx][1] # labels are same.
         if self.use_boundary: # we do not consider boundaries in cross-modal
             boundary = self._get_boundary(self.audio_list[idx][0], raw_data)
             return preprocess_data, label, boundary
         else:
-            return audio_preprocess_data,video_preprocess_data # we don't need label.
+            return audio_preprocess_data,video_preprocess_data,audio_data # we don't need label. we need original audio data without mixup!
 
     def __len__(self):
         return len(self._audio_data_files) # video will be same
@@ -375,12 +377,18 @@ def pad_packed_collate(batch):
     else:
         return data, lengths, labels
 
-def av_pad_packed_collate(batch): ## our av collate function
-    if len(batch[0]) == 2:
+def av_pad_packed_collate(batch): ## our av collate function #TODO implement faster tensor transforms
+    if len(batch[0]) == 3:
         use_boundary = False
-        audio_data_tuple, audio_lengths, video_data_tuple, video_lengths = zip(*[(a, a.shape[0], b, b.shape[0]) for (a, b) in sorted(batch, key=lambda x: x[0].shape[0], reverse=True)])
+        audio_data_tuple, audio_lengths, video_data_tuple, video_lengths,audio_raw_data = zip(*[(a, a.shape[0], b, b.shape[0],c) for (a, b,c) in sorted(batch, key=lambda x: x[0].shape[0], reverse=True)])
     
-    
+    max_len = audio_raw_data[0].shape[0]
+    audio_data_np = np.zeros((len(audio_raw_data), max_len))
+
+    for idx in range( len(audio_raw_data)):
+        audio_raw_data[idx][:audio_raw_data[idx].shape[0]] = audio_raw_data[idx]
+
+
     max_len = audio_data_tuple[0].shape[0]
     audio_data_np = np.zeros((len(audio_data_tuple), max_len))
 
@@ -394,7 +402,8 @@ def av_pad_packed_collate(batch): ## our av collate function
         video_data_np[idx][:video_data_tuple[idx].shape[0]] = video_data_tuple[idx]
 
     
-    audio_data = torch.FloatTensor(audio_data_np)
+    audio_data = torch.FloatTensor(audio_data_np) ##TODO need to transform ndarray to set off arrays for faster tensor transform
     video_data = torch.FloatTensor(video_data_np)
+    audio_raw_data = torch.FloatTensor(audio_raw_data)
 
-    return audio_data, video_data, audio_lengths, video_lengths
+    return audio_data, video_data, audio_lengths, video_lengths,audio_raw_data

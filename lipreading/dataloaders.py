@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from lipreading.preprocess import *
 from lipreading.dataset import MyDataset, pad_packed_collate, av_pad_packed_collate, AVDataset
-
+from torch.utils.data import Subset
 
 def get_preprocessing_pipelines(modality):
     # -- preprocess for the video stream
@@ -65,6 +65,7 @@ def get_preprocessing_pipelines(modality):
 
         audio_preprocessing['test'] = NormalizeUtterance()
 
+
         preprocessing['audio'] = audio_preprocessing
         preprocessing['video'] = video_preprocessing
     return preprocessing
@@ -111,6 +112,32 @@ def get_data_loaders(args):
                         batch_size=args.batch_size,
                         shuffle=True,
                         collate_fn=pad_packed_collate,
+                        pin_memory=True,
+                        num_workers=args.workers,
+                        worker_init_fn=np.random.seed(1)) for x in partitions}
+    return dset_loaders
+
+
+def unit_test_data_loader(args): ## unit test dataloader for multimodal(av) loading.
+    preprocessing = get_preprocessing_pipelines(args.modality)
+    subset_indices = range(256)  # Specify the indices for the desired subset
+    if args.modality == "av":
+        partitions = ['test'] if args.test else ['train','val','test']
+        dsets = {partition:Subset(AVDataset(
+            modality = args.modality,
+            data_partition = partition,
+            data_dir = args.data_dir,
+            label_fp = args.label_path,
+            annonation_direc = args.annonation_direc,
+            preprocessing_func = preprocessing,
+            data_suffix = '.npz',
+            use_boundary=args.use_boundary,
+        ),subset_indices) for partition in partitions}
+        dset_loaders = {x: torch.utils.data.DataLoader(
+                        dsets[x],
+                        batch_size=args.batch_size,
+                        shuffle=True,
+                        collate_fn=av_pad_packed_collate,
                         pin_memory=True,
                         num_workers=args.workers,
                         worker_init_fn=np.random.seed(1)) for x in partitions}
