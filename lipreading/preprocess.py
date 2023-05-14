@@ -1,6 +1,7 @@
 import cv2
 import random
 import numpy as np
+import os
 
 __all__ = ['Compose', 'Normalize', 'CenterCrop', 'RgbToGray', 'RandomCrop',
            'HorizontalFlip', 'AddNoise', 'NormalizeUtterance', 'TimeMask']
@@ -151,7 +152,7 @@ class NormalizeUtterance():
 class AddNoise(object):
     """Add SNR noise [-1, 1]
     """
-
+    
     def __init__(self, noise, snr_levels=[-5, 0, 5, 10, 15, 20, 9999]):
         assert noise.dtype in [np.float32, np.float64], "noise only supports float data type"
         
@@ -179,6 +180,40 @@ class AddNoise(object):
             desired_signal = (signal + noise_clip*np.sqrt(factor)).astype(np.float32)
             return desired_signal
 
+
+class AddAudioNoise(object):
+    """Add another train audio as noise"""
+    # train 시에만 사용
+    def __init__(self):
+        pass
+
+    def __call__(self, signal):
+        signal = signal['data'] # .npz to numpy array
+
+        # find a random noise file
+        folder_path = '..\\datasets\\audio_data\\'
+        file_list = os.listdir(folder_path) 
+        random_folder = random.choice(file_list)
+        file_list = os.listdir(folder_path+random_folder+"\\train\\")
+        random_file = random.choice(file_list)
+        noise_data = np.load(random_file)['data']
+
+        src_len = len(signal)
+        noise_len = len(noise_data)
+
+        start_time = random.randint(-noise_len, src_len) # 겹치는 위치
+
+        if start_time < 0:
+            noise_data = noise_data[-start_time:]
+            noise_data = np.pad(noise_data, (0, src_len-start_time-noise_len), mode='constant', constant_values = 0)
+        else:
+            noise_data = noise_data[:src_len - start_time]
+            noise_data = np.pad(noise_data, (start_time, 0), mode='constant', constant_values = 0)
+        
+        # noise의 크기 : 0~0.5 랜덤 값
+        noised_signal = signal + random.random()*0.5*noise_data
+        return noised_signal
+    
 
 class TimeMask():
     """time mask
