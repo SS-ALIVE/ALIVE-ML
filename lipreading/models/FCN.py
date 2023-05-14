@@ -56,6 +56,7 @@ class FCN(nn.Module):
 
 
     def forward(self, x):
+
         x = self.block1(x)
         x1 = x
         # print("x1 : ", x1.shape)

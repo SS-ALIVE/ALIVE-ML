@@ -22,7 +22,7 @@ from lipreading.utils import load_json, save2npz
 from lipreading.utils import load_model, CheckpointSaver
 from lipreading.utils import get_logger, update_logger_batch
 from lipreading.utils import showLR, calculateNorm2, AverageMeter
-from lipreading.model import Lipreading
+from lipreading.model import Lipreading, AVLipreading
 from lipreading.mixup import mixup_data, mixup_criterion
 from lipreading.optim_utils import get_optimizer, CosineScheduler
 from lipreading.dataloaders import get_data_loaders, get_preprocessing_pipelines
@@ -57,6 +57,10 @@ def load_args(default_config=None):
     parser.add_argument('--densetcn-reduced-size', default=256, type=int, help='the feature dim for the output of reduce layer')
     parser.add_argument('--densetcn-se', default = False, action='store_true', help='If True, enable SE in DenseTCN')
     parser.add_argument('--densetcn-condense', default = False, action='store_true', help='If True, enable condenseTCN')
+    # -- attention config
+    parser.add_argument('--attention-embed-dim', type=int, default = 1664,  help='Attention layer input embedding size')
+    parser.add_argument('--attention-num-head', type=int, default = 8, help='Attention layer head num')
+    parser.add_argument('--attention-dropout', type=float, default = 0.2, help='Attention layer dropout')
     # -- train
     parser.add_argument('--training-mode', default='tcn', help='tcn')
     parser.add_argument('--batch-size', type=int, default=32, help='Mini-batch size')
@@ -137,6 +141,62 @@ def evaluate(model, dset_loader, criterion):
     return running_corrects/len(dset_loader.dataset), running_loss/len(dset_loader.dataset)
 
 
+def test_train(model, dset_loader, criterion, epoch, optimizer, logger):
+    data_time = AverageMeter()
+    batch_time = AverageMeter()
+
+    lr = showLR(optimizer)
+
+    logger.info('-' * 10)
+    logger.info(f"Epoch {epoch}/{args.epochs - 1}")
+    logger.info(f"Current learning rate: {lr}")
+
+    model.train()
+    running_loss = 0.
+    running_corrects = 0.
+    running_all = 0.
+
+    end = time.time()
+    for batch_idx, data in enumerate(dset_loader):
+        audio_data,video_data,audio_lengths,video_lengths = data
+        # measure data loading time
+        data_time.update(time.time() - end)
+
+        #train for multiple gpus
+        #lengths = lengths[0]*len(lengths)//(torch.cuda.device_count())
+        # --
+    
+        optimizer.zero_grad()
+
+        # (32, 1, 29, 88, 88)
+        # (32, 1, 18560)
+        audio_data = audio_data.unsqueeze(1).to(device)
+        video_data = video_data.unsqueeze(1).to(device)
+        logits = model(audio_data,video_data, audio_lengths,video_lengths)
+        print("this should not be printed")
+        #print(logits) #is model working properly?
+
+        loss_func = mixup_criterion(labels_a, labels_b, lam)
+        loss = loss_func(criterion, logits)
+
+        loss.backward()
+        optimizer.step()
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+        # -- compute running performance
+        _, predicted = torch.max(F.softmax(logits, dim=1).data, dim=1)
+        running_loss += loss.item()*input.size(0)
+        running_corrects += lam * predicted.eq(labels_a.view_as(predicted)).sum().item() + (1 - lam) * predicted.eq(labels_b.view_as(predicted)).sum().item()
+        running_all += input.size(0)
+        # -- log intermediate results
+        if batch_idx % args.interval == 0 or (batch_idx == len(dset_loader)-1):
+            update_logger_batch( args, logger, dset_loader, batch_idx, running_loss, running_corrects, running_all, batch_time, data_time )
+
+    return model
+
+
 def train(model, dset_loader, criterion, epoch, optimizer, logger):
     data_time = AverageMeter()
     batch_time = AverageMeter()
@@ -171,6 +231,8 @@ def train(model, dset_loader, criterion, epoch, optimizer, logger):
 
         optimizer.zero_grad()
 
+        # (32, 1, 29, 88, 88)
+        # (32, 1, 18560)
         logits = model(input.unsqueeze(1).to(device), lengths=lengths, boundaries=boundaries)
         #print(logits) #is model working properly?
 
@@ -225,6 +287,25 @@ def get_model_from_json():
     else:
         densetcn_options = {}
 
+    if args.modality == "av": ## multi modal lipreading model
+        attention_options = {
+            'embed_dim' : args.attention_embed_dim,
+            'num_heads' : args.attention_num_head,
+            'dropout' : args.attention_dropout,
+        }
+        model = AVLipreading( modality=args.modality,
+                        num_classes=args.num_classes,
+                        tcn_options=tcn_options,
+                        densetcn_options=densetcn_options,
+                        attention_options=attention_options,
+                        backbone_type=args.backbone_type,
+                        relu_type=args.relu_type,
+                        width_mult=args.width_mult,
+                        use_boundary=args.use_boundary,
+                        extract_feats=args.extract_feats)
+        calculateNorm2(model)
+        return model
+
     model = Lipreading( modality=args.modality,
                         num_classes=args.num_classes,
                         tcn_options=tcn_options,
@@ -246,21 +327,29 @@ def main():
     logger = get_logger(args, save_path)
     ckpt_saver = CheckpointSaver(save_path)
 
-    
-    dset_loaders = get_data_loaders(args) 
-    exit()
-        
-
+    # dset_loaders = get_data_loaders(args) 
+    # print("data loaded!,testing...")
+    # for batch_idx, data in enumerate(dset_loaders['train']): 
+    #     print(data[2])
+    #     print(data[0].shape)
+    #     print(data[1].shape)
+    #     print(data[2])
+    #     print(batch_idx)
+    #     break 
+    # print("data no problem, exit")
+    # exit()
     # -- get model
     model = get_model_from_json()
 
+    print(torch.cuda.device_count())
     # -- check CUDA / Multiple device
     if torch.cuda.device_count()>1:
         model = nn.DataParallel(model)
     
     model.to(device)
+    print(device)
     # -- get dataset iterators
-    
+    dset_loaders = get_data_loaders(args) 
     # -- get loss function
     criterion = nn.CrossEntropyLoss()
     # -- get optimizer
@@ -298,7 +387,8 @@ def main():
     epoch = args.init_epoch
 
     while epoch < args.epochs:
-        model = train(model, dset_loaders['train'], criterion, epoch, optimizer, logger)
+        #model = train(model, dset_loaders['train'], criterion, epoch, optimizer, logger) # optimize?
+        model = test_train(model,dset_loaders['train'],criterion,epoch,optimizer,logger)
         acc_avg_val, loss_avg_val = evaluate(model, dset_loaders['val'], criterion)
         logger.info(f"{'val'} Epoch:\t{epoch:2}\tLoss val: {loss_avg_val:.4f}\tAcc val:{acc_avg_val:.4f}, LR: {showLR(optimizer)}")
         # -- save checkpoint

@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from lipreading.preprocess import *
-from lipreading.dataset import MyDataset, pad_packed_collate, AVDataset
+from lipreading.dataset import MyDataset, pad_packed_collate, av_pad_packed_collate, AVDataset
 
 
 def get_preprocessing_pipelines(modality):
@@ -89,7 +89,7 @@ def get_data_loaders(args):
                         dsets[x],
                         batch_size=args.batch_size,
                         shuffle=True,
-                        collate_fn=pad_packed_collate,
+                        collate_fn=av_pad_packed_collate,
                         pin_memory=True,
                         num_workers=args.workers,
                         worker_init_fn=np.random.seed(1)) for x in partitions}

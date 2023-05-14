@@ -262,7 +262,7 @@ class AVDataset(object): # dataset for multi-modal training
             self._video_data_files.extend( glob.glob( search_str_npz ) )
             self._video_data_files.extend( glob.glob( search_str_npy ) )
             self._video_data_files.extend( glob.glob( search_str_mp4 ) )
-            self._video_data_files = [ f for f in self._audio_data_files if f.split('\\')[self.label_idx] in self._labels ]
+            self._video_data_files = [ f for f in self._video_data_files if f.split('\\')[self.label_idx] in self._labels ]
         #print(self._data_files[10])
         #print(glob.glob(os.path.join(self._data_dir,search_str_mp4)))
         # If we are not using the full set of labels, remove examples for labels not used
@@ -325,18 +325,18 @@ class AVDataset(object): # dataset for multi-modal training
     def __getitem__(self, idx):
 
         audio_raw_data = self.load_data(self.audio_list[idx][0])
-        video_raw_data = self.load_data(self.viceo_list[idx][0])
+        video_raw_data = self.load_data(self.video_list[idx][0])
         # -- perform variable length on training set
         if ( self._data_partition == 'train' ) and self.is_var_length and not self.use_boundary:
-            data = self._apply_variable_length_aug(self.list[idx][0], raw_data)
+            data = self._apply_variable_length_aug(self.audio_list[idx][0], raw_data)
         else:
             audio_data = audio_raw_data
             video_data = video_raw_data
         audio_preprocess_data = self.audio_preprocessing_func(audio_data)
         video_preprocess_data = self.video_preprocessing_func(video_data)
-        label = self.list[idx][1] # labels are same.
-        if self.use_boundary:
-            boundary = self._get_boundary(self.list[idx][0], raw_data)
+        label = self.audio_list[idx][1] # labels are same.
+        if self.use_boundary: # we do not consider boundaries in cross-modal
+            boundary = self._get_boundary(self.audio_list[idx][0], raw_data)
             return preprocess_data, label, boundary
         else:
             return audio_preprocess_data,video_preprocess_data # we don't need label.
@@ -374,3 +374,27 @@ def pad_packed_collate(batch):
         return data, lengths, labels, boundaries
     else:
         return data, lengths, labels
+
+def av_pad_packed_collate(batch): ## our av collate function
+    if len(batch[0]) == 2:
+        use_boundary = False
+        audio_data_tuple, audio_lengths, video_data_tuple, video_lengths = zip(*[(a, a.shape[0], b, b.shape[0]) for (a, b) in sorted(batch, key=lambda x: x[0].shape[0], reverse=True)])
+    
+    
+    max_len = audio_data_tuple[0].shape[0]
+    audio_data_np = np.zeros((len(audio_data_tuple), max_len))
+
+    for idx in range( len(audio_data_np)):
+        audio_data_np[idx][:audio_data_tuple[idx].shape[0]] = audio_data_tuple[idx]
+
+    max_len, h, w = video_data_tuple[0].shape
+    video_data_np = np.zeros((len(video_data_tuple), max_len, h, w))
+
+    for idx in range( len(video_data_np)):
+        video_data_np[idx][:video_data_tuple[idx].shape[0]] = video_data_tuple[idx]
+
+    
+    audio_data = torch.FloatTensor(audio_data_np)
+    video_data = torch.FloatTensor(video_data_np)
+
+    return audio_data, video_data, audio_lengths, video_lengths
