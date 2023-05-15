@@ -130,7 +130,7 @@ def evaluate(model, dset_loader, criterion):
                 input, lengths, labels = data
                 boundaries = None
             # for multiple gpus
-            lengths = lengths[0]*len(lengths)//(torch.cuda.device_count())
+            lengths = [lengths[0]]*(len(lengths)//(torch.cuda.device_count()))
 
             logits = model(input.unsqueeze(1).to(device), lengths=lengths, boundaries=boundaries)
             _, preds = torch.max(F.softmax(logits, dim=1).data, dim=1)
