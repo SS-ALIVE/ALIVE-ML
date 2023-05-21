@@ -426,4 +426,4 @@ def mel_transform(batch_data): ## transform audio_raw_data into mel_spectrogram 
                 hop_length=145,
                 n_mels=128
             )
-    return mel_trans(batch_data)[:,:,:,128]
+    return mel_trans(batch_data)[:,:,128]
