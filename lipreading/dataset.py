@@ -7,7 +7,7 @@ import numpy as np
 import sys
 from lipreading.utils import read_txt_lines
 from lipreading.preprocess import NormalizeUtterance
-
+import torchaudio.transforms as transforms
 
 class MyDataset(object):
     def __init__(self, modality, data_partition, data_dir, label_fp, annonation_direc=None,
@@ -341,7 +341,7 @@ class AVDataset(object): # dataset for multi-modal training
             boundary = self._get_boundary(self.audio_list[idx][0], raw_data)
             return preprocess_data, label, boundary
         else:
-            return audio_preprocess_data,video_preprocess_data,audio_data # we don't need label. we need original audio data without mixup!
+            return audio_preprocess_data,video_preprocess_data,audio_raw_data # we don't need label. we need original audio data without mixup!
 
     def __len__(self):
         return len(self._audio_data_files) # video will be same
@@ -377,7 +377,7 @@ def pad_packed_collate(batch):
         return data, lengths, labels
 
 def av_pad_packed_collate(batch): ## our av collate function #TODO implement faster tensor transforms
-    if len(batch[0]) == 3:
+    if len(batch[0]) == 3: # audio_preprocessed,video_preprocessed,audio_raw
         use_boundary = False
         audio_data_tuple, audio_lengths, video_data_tuple, video_lengths,audio_raw_data = zip(*[(a, a.shape[0], b, b.shape[0],c) for (a, b,c) in sorted(batch, key=lambda x: x[0].shape[0], reverse=True)])
     
@@ -387,7 +387,7 @@ def av_pad_packed_collate(batch): ## our av collate function #TODO implement fas
     for idx in range( len(audio_raw_data)):
         audio_raw_data[idx][:audio_raw_data[idx].shape[0]] = audio_raw_data[idx]
 
-
+    #audio_raw_mel = np.array(mel_transform(audio_raw_data)) # transform padded audio_raw_data into melspectrogram
     max_len = audio_data_tuple[0].shape[0]
     audio_data_np = np.zeros((len(audio_data_tuple), max_len))
 
@@ -400,9 +400,30 @@ def av_pad_packed_collate(batch): ## our av collate function #TODO implement fas
     for idx in range( len(video_data_np)):
         video_data_np[idx][:video_data_tuple[idx].shape[0]] = video_data_tuple[idx]
 
-    
-    audio_data = torch.FloatTensor(audio_data_np) ##TODO need to transform ndarray to set off arrays for faster tensor transform
-    video_data = torch.FloatTensor(video_data_np)
-    audio_raw_data = torch.FloatTensor(audio_raw_data)
 
-    return audio_data, video_data, audio_lengths, video_lengths,audio_raw_data
+    # Create a PyTorch tensor from the list of NumPy arrays
+    # audio_data_list = [torch.from_numpy(arr,dtype=torch.float) for arr in audio_data_np]
+    # audio_data = torch.stack(audio_data_list)
+
+    # video_data_list = [torch.from_numpy(arr,dtype=torch.float) for arr in video_data_np]
+    # video_data = torch.stack(video_data_list)
+
+    # audio_raw_data_list = [torch.from_numpy(arr,dtype=torch.float) for arr in audio_raw_data]
+    # audio_raw_data = torch.stack(audio_raw_data_list)
+    audio_data = torch.FloatTensor(np.array(audio_data_np)) ##TODO need to transform ndarray to set off arrays for faster tensor transform
+    video_data = torch.FloatTensor(np.array(video_data_np))
+    audio_raw_data = torch.FloatTensor(np.array(audio_raw_data))
+    #audio_raw_mel = torch.FloatTensor(audio_raw_mel)
+    audio_raw_mel = mel_transform(audio_raw_data)
+
+
+    return audio_data, video_data, audio_lengths, video_lengths,audio_raw_mel#,audio_raw_data # temp 
+
+def mel_transform(batch_data): ## transform audio_raw_data into mel_spectrogram => something's wrong #TODO
+    mel_trans = transforms.MelSpectrogram(
+                sample_rate = 16000,
+                n_fft=1024,
+                hop_length=145,
+                n_mels=128
+            )
+    return mel_trans(batch_data)[:,:,:,128]

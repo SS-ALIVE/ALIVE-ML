@@ -12,12 +12,17 @@ import random
 import argparse
 import numpy as np
 from tqdm import tqdm
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import soundfile as sf
+from torchmetrics.audio.stoi import ShortTimeObjectiveIntelligibility
+import torchaudio.transforms as transforms
+import librosa
+
 
 from lipreading.utils import get_save_folder
 from lipreading.utils import load_json, save2npz
@@ -28,7 +33,7 @@ from lipreading.model import Lipreading, AVLipreading
 from lipreading.mixup import mixup_data, mixup_criterion
 from lipreading.optim_utils import get_optimizer, CosineScheduler
 from lipreading.dataloaders import get_data_loaders, get_preprocessing_pipelines, unit_test_data_loader
-
+from lipreading.dataset import mel_transform
 
 def load_args(default_config=None):
     parser = argparse.ArgumentParser(description='Pytorch Lipreading ')
@@ -142,8 +147,79 @@ def evaluate(model, dset_loader, criterion):
     print(f"{len(dset_loader.dataset)} in total\tCR: {running_corrects/len(dset_loader.dataset)}")
     return running_corrects/len(dset_loader.dataset), running_loss/len(dset_loader.dataset)
 
+def mel_to_wav(mel): ##TODO something's wrong with this (backward propagation problem, torchaudio.transforms uses SGD or whatever)
+    invMel_trans = transforms.InverseMelScale(
+        sample_rate = 16000,
+        n_stft = 1024 // 2 + 1,
+    ).to(device)
+    waveform = invMel_trans(mel)
+    return waveform
+
+
 
 ##TODO need to implement multimodal evaluate function
+def multimodal_eval(model, dset_loader, criterion):
+    model.eval()
+    running_loss = 0.
+    running_stoi = 0.
+
+    with torch.no_grad():
+        for batch_idx, data in enumerate(tqdm(dset_loader)):
+            audio_data,video_data,audio_lengths,video_lengths,audio_raw_mel = data
+            # for multiple gpus
+            audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(torch.cuda.device_count()))
+            video_lengths = [video_lengths[0]]*(len(video_lengths)//(torch.cuda.device_count()))
+            #temp = mel_transform(audio_data.detach().numpy()) 
+            audio_data = audio_data.unsqueeze(1).to(device) 
+            video_data = video_data.unsqueeze(1).to(device)
+            audio_raw_mel = audio_raw_mel.to(device)
+            #print(audio_raw_mel.shape)
+            logits = model(audio_data,video_data, audio_lengths,video_lengths)
+            # audio_raw_mel.requires_grad = True
+            # logits.requires_grad = True
+            # label_wav = mel_to_wav(audio_raw_mel)
+            # pred_wav = mel_to_wav(logits)
+            # plt.figure(figsize=(10, 4))
+            # plt.imshow(torch.log(temp.detach().cpu()[0]), aspect='auto', origin='lower')
+            # plt.colorbar(format='%+2.0f dB')
+            # plt.title('Mel Spectrogram')
+            # plt.xlabel('Frames')
+            # plt.ylabel('Mel Filterbanks')
+            # plt.tight_layout()
+            # plt.savefig('./audio_noise_mel.png')
+            # plt.figure(figsize=(10, 4))
+            # plt.imshow(torch.log(logits.detach().cpu()[0]), aspect='auto', origin='lower')
+            # plt.colorbar(format='%+2.0f dB')
+            # plt.title('Mel Spectrogram')
+            # plt.xlabel('Frames')
+            # plt.ylabel('Mel Filterbanks')
+            # plt.tight_layout()
+            # plt.savefig('./logits.png')
+            # plt.figure(figsize=(10, 4))
+            # plt.imshow(torch.log(audio_raw_mel.detach().cpu()[0]), aspect='auto', origin='lower')
+            # plt.colorbar(format='%+2.0f dB')
+            # plt.title('Mel Spectrogram')
+            # plt.xlabel('Frames')
+            # plt.ylabel('Mel Filterbanks')
+            # plt.tight_layout()
+            # plt.savefig('./audio_raw_mel.png')
+            #waveform1 = librosa.feature.inverse.mel_to_audio(logits[0].detach().cpu().numpy(),sr=16000,n_fft=1024,hop_length =145) # i
+            #waveform2 = librosa.feature.inverse.mel_to_audio(temp[0],sr=16000,n_fft=1024,hop_length=145)
+            #sf.write('logit.wav', waveform1, 16000)
+            #sf.write('audio_noise.wav', waveform2, 16000)
+            #sf.write('test4.wav',audio_data.squeeze().detach().cpu().numpy()[0],16000)
+            
+            #exit()
+            
+            #stoi_metric = ShortTimeObjectiveIntelligibility(sr=16000,extended=False)
+            loss = criterion(logits,audio_raw_mel) # mse
+            running_loss += loss.item() * audio_data.size(0)
+            #running_stoi += stoi_metric(pred_wav,label_wav).item() ## TODO need to implement STOI calculation (mask-ground_truth)
+
+    print(f"{len(dset_loader.dataset)} in total\tCR: {running_stoi /len(dset_loader.dataset)}")
+    return running_stoi/len(dset_loader.dataset), running_loss/len(dset_loader.dataset)
+        
+
 def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
     data_time = AverageMeter()
     batch_time = AverageMeter()
@@ -161,7 +237,7 @@ def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
 
     end = time.time()
     for batch_idx, data in enumerate(dset_loader):
-        audio_data,video_data,audio_lengths,video_lengths,audio_raw_data = data
+        audio_data,video_data,audio_lengths,video_lengths,audio_raw_mel = data
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -174,28 +250,30 @@ def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
 
         # (32, 1, 29, 88, 88)
         # (32, 1, 18560)
-        sf.write('original_audio.wav',audio_data[0],16000) ##TODO need to erase this saving codes .
+        #sf.write('original_audio.wav',audio_data[0],16000) ##TODO need to erase this saving codes .
         audio_data = audio_data.unsqueeze(1).to(device)
         video_data = video_data.unsqueeze(1).to(device)
-        audio_raw_data = audio_raw_data.to(device)
-        
+        audio_raw_mel = audio_raw_mel.to(device)
+        #print(audio_raw_mel.shape)
         logits = model(audio_data,video_data, audio_lengths,video_lengths)
-        print(logits) #is model working properly?
-        print(logits.shape)
-        torch.save(logits[0],'./masked_audio.pt') # save logit value to play.. ## TODO make function to sample masked & original sound file for testing.
-        plt.figure(figsize=(10, 4))
-        plt.imshow(torch.log(logits.detach().cpu()[0]), aspect='auto', origin='lower')
-        plt.colorbar(format='%+2.0f dB')
-        plt.title('Mel Spectrogram')
-        plt.xlabel('Frames')
-        plt.ylabel('Mel Filterbanks')
-        plt.tight_layout()
-        plt.savefig('./masked_mel.png')
-        exit()
-        #print(logits) #is model working properly?
 
-        loss_func = mixup_criterion(labels_a, labels_b, lam)
-        loss = loss_func(criterion, logits)
+        #functionalize this part to check mel-spectrogram every 10 epoch
+        # print(logits) #is model working properly?
+        # print(logits.shape)
+        # torch.save(logits[0],'./masked_audio.pt') # save logit value to play.. ## TODO make function to sample masked & original sound file for testing.
+        # plt.figure(figsize=(10, 4))
+        # plt.imshow(torch.log(logits.detach().cpu()[0]), aspect='auto', origin='lower')
+        # plt.colorbar(format='%+2.0f dB')
+        # plt.title('Mel Spectrogram')
+        # plt.xlabel('Frames')
+        # plt.ylabel('Mel Filterbanks')
+        # plt.tight_layout()
+        # plt.savefig('./masked_mel.png')
+        # exit()
+        # #print(logits) #is model working properly?
+
+        #loss_func = mixup_criterion(labels_a, labels_b, lam)
+        loss = criterion(logits,audio_raw_mel)
 
         loss.backward()
         optimizer.step()
@@ -205,12 +283,11 @@ def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
         end = time.time()
         # -- compute running performance
         _, predicted = torch.max(F.softmax(logits, dim=1).data, dim=1)
-        running_loss += loss.item()*input.size(0)
-        running_corrects += lam * predicted.eq(labels_a.view_as(predicted)).sum().item() + (1 - lam) * predicted.eq(labels_b.view_as(predicted)).sum().item()
-        running_all += input.size(0)
+        running_loss += loss.item()*audio_data.size(0)
+        running_all += audio_data.size(0)
         # -- log intermediate results
         if batch_idx % args.interval == 0 or (batch_idx == len(dset_loader)-1):
-            update_logger_batch( args, logger, dset_loader, batch_idx, running_loss, running_corrects, running_all, batch_time, data_time )
+            update_logger_batch(args, logger, dset_loader, batch_idx, running_loss, 0, running_all, batch_time, data_time ) ## TODO STOI implementation?
 
     return model
 
@@ -338,7 +415,7 @@ def get_model_from_json():
 def main():
 
     # -- logging
-    save_path = get_save_folder( args)
+    save_path = get_save_folder(args)
     print(f"Model and log being saved in: {save_path}")
     logger = get_logger(args, save_path)
     ckpt_saver = CheckpointSaver(save_path)
@@ -365,12 +442,16 @@ def main():
         model = nn.DataParallel(model)
     
     model.to(device)
-    print(device)
+    ## model size check
+    # tot_param = sum(p.numel()for p in model.parameters())
+    # print("total_params = ",tot_param)
+    # exit()
+    
     # -- get dataset iterators
-    dset_loaders = get_data_loaders(args) 
-    #dset_loaders = unit_test_data_loader(args)
+    #dset_loaders = get_data_loaders(args) 
+    dset_loaders = unit_test_data_loader(args) # using subset of dataset (currently 48032)
     # -- get loss function
-    criterion = nn.CrossEntropyLoss() ## TODO : Implement STOI Loss function
+    criterion = nn.MSELoss() if args.modality =="av" else nn.CrossEntropyLoss() 
     # -- get optimizer
     optimizer = get_optimizer(args, optim_policies=model.parameters())
     # -- get learning rate scheduler
@@ -395,7 +476,10 @@ def main():
             return
         # if test-time, performance on test partition and exit. Otherwise, performance on validation and continue (sanity check for reload)
         if args.test:
-            acc_avg_test, loss_avg_test = evaluate(model, dset_loaders['test'], criterion)
+            if args.modality == "av":
+                acc_avg_test, loss_avg_test = multimodal_eval(model, dset_loaders['test'], criterion)    
+            else:
+                acc_avg_test, loss_avg_test = evaluate(model, dset_loaders['test'], criterion)
             logger.info(f"Test-time performance on partition {'test'}: Loss: {loss_avg_test:.4f}\tAcc:{acc_avg_test:.4f}")
             return
 
@@ -411,7 +495,10 @@ def main():
         else:
             model = train(model, dset_loaders['train'], criterion, epoch, optimizer, logger) # optimize?
         
-        acc_avg_val, loss_avg_val = evaluate(model, dset_loaders['val'], criterion)
+        if args.modality =="av":
+            acc_avg_val, loss_avg_val = multimodal_eval(model,dset_loaders['val'],criterion)
+        else:
+            acc_avg_val, loss_avg_val = evaluate(model, dset_loaders['val'], criterion)
         logger.info(f"{'val'} Epoch:\t{epoch:2}\tLoss val: {loss_avg_val:.4f}\tAcc val:{acc_avg_val:.4f}, LR: {showLR(optimizer)}")
         # -- save checkpoint
         save_dict = {
@@ -426,7 +513,10 @@ def main():
     # -- evaluate best-performing epoch on test partition
     best_fp = os.path.join(ckpt_saver.save_dir, ckpt_saver.best_fn)
     _ = load_model(best_fp, model)
-    acc_avg_test, loss_avg_test = evaluate(model, dset_loaders['test'], criterion)
+    if args.modality == "av":
+        acc_avg_test, loss_avg_test = multimodal_eval(model, dset_loaders['test'], criterion)
+    else:
+        acc_avg_test, loss_avg_test = evaluate(model, dset_loaders['test'], criterion)
     logger.info(f"Test time performance of best epoch: {acc_avg_test} (loss: {loss_avg_test})")
 
 if __name__ == '__main__':

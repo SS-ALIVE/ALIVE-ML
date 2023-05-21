@@ -145,14 +145,15 @@ class NormalizeUtterance():
     def __call__(self, signal):
         signal_std = 0. if np.std(signal)==0. else np.std(signal)
         signal_mean = np.mean(signal)
-        return (signal - signal_mean) / signal_std
+        #return (signal - signal_mean) / signal_std
+        return signal ## temporal code - not using normalization!
 
 
 class AddNoise(object):
     """Add SNR noise [-1, 1]
     """
     
-    def __init__(self, noise, snr_levels=[-5, 0, 5, 10, 15, 20, 9999]):
+    def __init__(self, noise, snr_levels=[-5, 0, 5, 10, 15, 20,9999]): 
         assert noise.dtype in [np.float32, np.float64], "noise only supports float data type"
         
         self.noise = noise

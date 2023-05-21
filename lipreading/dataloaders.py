@@ -61,9 +61,13 @@ def get_preprocessing_pipelines(modality):
                                     AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
                                     NormalizeUtterance()])
 
-        audio_preprocessing['val'] = NormalizeUtterance()
+        audio_preprocessing['val'] = Compose([
+                                    AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
+                                    NormalizeUtterance()])
 
-        audio_preprocessing['test'] = NormalizeUtterance()
+        audio_preprocessing['test'] = Compose([
+                                    AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
+                                    NormalizeUtterance()])
 
 
         preprocessing['audio'] = audio_preprocessing
@@ -120,7 +124,7 @@ def get_data_loaders(args):
 
 def unit_test_data_loader(args): ## unit test dataloader for multimodal(av) loading.
     preprocessing = get_preprocessing_pipelines(args.modality)
-    subset_indices = range(256)  # Specify the indices for the desired subset
+    subset_indices = range(48032)  # Specify the indices for the desired subset
     if args.modality == "av":
         partitions = ['test'] if args.test else ['train','val','test']
         dsets = {partition:Subset(AVDataset(

@@ -367,14 +367,25 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
 
             # audio feature extraction
             # (B,1,18560)
-            B, C, T = audio_data.size()
+            B, C, T = audio_data.size() ## audio is not normalized (-1,1)
+            #print("audio_data - max",torch.max(audio_data))
             ## mel-spectogram generation
             # audio_data = (B,18560),normalized tensor #TODO : must isolate mel-spectogram generation from forward computation
+            #print(torch.max(audio_data))
             
             mel_spec = self.mel_transform(audio_data.squeeze()) # generated mel-spectogram
+            #print(torch.max(mel_spec))
             #print(mel_spec.shape)
             ###
             
+            # (b,1,18560) (32,1,18560)
+            audio_data = audio_data.squeeze() ## normalize
+            mean = torch.mean(audio_data,dim=1,keepdim=True)
+            std = torch.std(audio_data,dim=1,keepdim=True)
+            audio_data = (audio_data - mean)/std 
+            audio_data = audio_data.unsqueeze(1)
+            
+            #print(torch.max(audio_data))
             audio_data = self.audio_trunk(audio_data)
             audio_data = audio_data.transpose(1, 2) # (B, T, 512)
             audio_lengths = [_//640 for _ in audio_lengths] 
@@ -409,7 +420,7 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
             #print("raw = ",mel_spec.shape)
             mask = mask.squeeze()
             out = torch.mul(mask,mel_spec[:,:,:128]) # element-wise multiplication (mask, original) - mel-spectogram
-            #print("out = ",out.shape)
+            
         return out
 
 
