@@ -221,6 +221,7 @@ def multimodal_eval(model, dset_loader, criterion):
         
 
 def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
+    #return model # test validation
     data_time = AverageMeter()
     batch_time = AverageMeter()
 

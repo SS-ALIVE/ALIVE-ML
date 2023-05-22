@@ -324,7 +324,6 @@ class AVDataset(object): # dataset for multi-modal training
         return boundary
 
     def __getitem__(self, idx):
-
         audio_raw_data = self.load_data(self.audio_list[idx][0])
         video_raw_data = self.load_data(self.video_list[idx][0])
         # -- perform variable length on training set
@@ -426,4 +425,4 @@ def mel_transform(batch_data): ## transform audio_raw_data into mel_spectrogram 
                 hop_length=145,
                 n_mels=128
             )
-    return mel_trans(batch_data)[:,:,128]
+    return mel_trans(batch_data)[:,:,:128]
