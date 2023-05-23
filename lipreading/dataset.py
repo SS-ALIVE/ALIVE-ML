@@ -416,13 +416,19 @@ def av_pad_packed_collate(batch): ## our av collate function #TODO implement fas
     audio_raw_mel = mel_transform(audio_raw_data)
 
 
-    return audio_data, video_data, audio_lengths, video_lengths,audio_raw_mel#,audio_raw_data # temp 
+    return audio_data, video_data, audio_lengths, video_lengths, audio_raw_mel#,audio_raw_data # temp 
 
 def mel_transform(batch_data): ## transform audio_raw_data into mel_spectrogram => something's wrong #TODO
     mel_trans = transforms.MelSpectrogram(
                 sample_rate = 16000,
                 n_fft=1024,
                 hop_length=145,
-                n_mels=128
+                n_mels=128,
+                norm='slaney',
             )
     return mel_trans(batch_data)[:,:,:128]
+
+def audio_to_spectrogram(batch_data):
+    stft = torch.stft(batch_data, n_fft = 2048, hop_length = 145)
+
+    return stft[:,:1024,:128, :]

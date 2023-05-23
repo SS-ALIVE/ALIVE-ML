@@ -95,6 +95,11 @@ def load_args(default_config=None):
     parser.add_argument('--logging-dir', type=str, default='./train_logs', help = 'path to the directory in which to save the log file')
     # use boundaries
     parser.add_argument('--use-boundary', default=False, action='store_true', help='include hard border at the testing stage.')
+    # -- Spectrogram config
+    parser.add_argument('--spectrogram-hop-length', type=int, default=145, help='hop length of spectrogram')
+    parser.add_argument('--spectrogram-n-fft', type=int, default=2048, help='n_fft for making spectrogram')
+    parser.add_argument('--spectrogram-sample-rate', type=int, default=16000, help='sampling rate of spectrogram')
+
 
     args = parser.parse_args()
     return args
@@ -155,6 +160,9 @@ def mel_to_wav(mel): ##TODO something's wrong with this (backward propagation pr
     waveform = invMel_trans(mel)
     return waveform
 
+def spectrogram_to_wav(spectrogram):
+    stft = torch.istft(spectrogram, n_fft = args.n_fft, hop_length = args.hop_length)
+    return stft
 
 
 ##TODO need to implement multimodal evaluate function
@@ -166,10 +174,12 @@ def multimodal_eval(model, dset_loader, criterion):
     with torch.no_grad():
         for batch_idx, data in enumerate(tqdm(dset_loader)):
             audio_data,video_data,audio_lengths,video_lengths,audio_raw_mel = data
+
+
             # for multiple gpus
             audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(torch.cuda.device_count()))
             video_lengths = [video_lengths[0]]*(len(video_lengths)//(torch.cuda.device_count()))
-            #temp = mel_transform(audio_data.detach().numpy()) 
+            temp = mel_transform(audio_data.detach()) 
             audio_data = audio_data.unsqueeze(1).to(device) 
             video_data = video_data.unsqueeze(1).to(device)
             audio_raw_mel = audio_raw_mel.to(device)
@@ -203,10 +213,10 @@ def multimodal_eval(model, dset_loader, criterion):
             # plt.ylabel('Mel Filterbanks')
             # plt.tight_layout()
             # plt.savefig('./audio_raw_mel.png')
-            #waveform1 = librosa.feature.inverse.mel_to_audio(logits[0].detach().cpu().numpy(),sr=16000,n_fft=1024,hop_length =145) # i
-            #waveform2 = librosa.feature.inverse.mel_to_audio(temp[0],sr=16000,n_fft=1024,hop_length=145)
-            #sf.write('logit.wav', waveform1, 16000)
-            #sf.write('audio_noise.wav', waveform2, 16000)
+            waveform1 = librosa.feature.inverse.mel_to_audio(logits[0].detach().cpu().numpy(),sr=16000,n_fft=1024 // 2 + 1,hop_length =145, htk=True) # i
+            waveform2 = librosa.feature.inverse.mel_to_audio(temp[0].detach().cpu().numpy(),sr=16000,n_fft=1024 // 2 + 1,hop_length =145, htk=True)
+            sf.write('logit.wav', waveform1, 16000)
+            sf.write('audio_noise.wav', waveform2, 16000)
             #sf.write('test4.wav',audio_data.squeeze().detach().cpu().numpy()[0],16000)
             
             #exit()
@@ -274,6 +284,11 @@ def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
         # #print(logits) #is model working properly?
 
         #loss_func = mixup_criterion(labels_a, labels_b, lam)
+        
+        # print("logits", logits.shape)
+        # print("audio_raw_mel", audio_raw_mel.shape)
+        
+
         loss = criterion(logits,audio_raw_mel)
 
         loss.backward()
