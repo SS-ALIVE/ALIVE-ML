@@ -7,9 +7,9 @@ Spring 23',Industrial Project 1(CAPSTONE Design) - ALIVE - ML Repository
 
 ## Team Members
 - DL
-  - [Kwan](https://github.com/kwan7595) - Team Lead, Model Design / Training
-  - 
-  -
+  - [Kwan](https://github.com/kwan7595) - Team Lead
+  - [Suwhan](https://github.com/drrobot333) 
+  - [Uijin](https://github.com/youuijin)
   
 ## Dataset
 
