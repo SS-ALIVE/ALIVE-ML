@@ -181,6 +181,10 @@ class AVDataset(object): # dataset for multi-modal training
         self._label_fp = label_fp
         self._annonation_direc = annonation_direc
 
+        self.slash = "\\"
+        if os.name == "posix":
+            self.slash = "/"
+
         self.video_fps = 25
         self.audio_fps = 16000
         self.is_var_length = False # set True to use annonation directory
@@ -229,12 +233,12 @@ class AVDataset(object): # dataset for multi-modal training
     def _get_instance_id_from_path(self, x):
         # for now this works for npz/npys, might break for image folders
         #changed / to \\ for windows
-        instance_id = x.split('\\')[-1]
+        instance_id = x.split(self.slash)[-1]
         return os.path.splitext( instance_id )[0]
 
     def _get_label_from_path(self, x):
         # changed / to \\ for windows
-        return x.split('\\')[self.label_idx]
+        return x.split(self.slash)[self.label_idx]
 
     def _get_files_for_partition(self,is_audio=False):
         # get rgb/mfcc file paths
@@ -250,20 +254,20 @@ class AVDataset(object): # dataset for multi-modal training
         search_str_mp4 = os.path.join(dir_fp,"audio_data" if is_audio else "visual_data", '*', self._data_partition, '*.mp4')
 
         #replace \ with / - for windows
-        search_str_npz=search_str_npz.replace('/','\\')
-        search_str_npy=search_str_npy.replace('/','\\')
-        search_str_mp4=search_str_mp4.replace('/','\\')
+        search_str_npz=search_str_npz.replace('/',self.slash)
+        search_str_npy=search_str_npy.replace('/',self.slash)
+        search_str_mp4=search_str_mp4.replace('/',self.slash)
         #print(search_str_mp4,search_str_npy,search_str_npz)
         if is_audio:
             self._audio_data_files.extend( glob.glob( search_str_npz ) )
             self._audio_data_files.extend( glob.glob( search_str_npy ) )
             self._audio_data_files.extend( glob.glob( search_str_mp4 ) )
-            self._audio_data_files = [ f for f in self._audio_data_files if f.split('\\')[self.label_idx] in self._labels ]
+            self._audio_data_files = [ f for f in self._audio_data_files if f.split(self.slash)[self.label_idx] in self._labels ]
         else:
             self._video_data_files.extend( glob.glob( search_str_npz ) )
             self._video_data_files.extend( glob.glob( search_str_npy ) )
             self._video_data_files.extend( glob.glob( search_str_mp4 ) )
-            self._video_data_files = [ f for f in self._video_data_files if f.split('\\')[self.label_idx] in self._labels ]
+            self._video_data_files = [ f for f in self._video_data_files if f.split(self.slash)[self.label_idx] in self._labels ]
         #print(self._data_files[10])
         #print(glob.glob(os.path.join(self._data_dir,search_str_mp4)))
         # If we are not using the full set of labels, remove examples for labels not used
@@ -285,7 +289,7 @@ class AVDataset(object): # dataset for multi-modal training
 
     def _apply_variable_length_aug(self, filename, raw_data):
         # read info txt file (to see duration of word, to be used to do temporal cropping)
-        info_txt = os.path.join(self._annonation_direc, *filename.split('\\')[self.label_idx:] )  # swap base folder, changed '/' to '\\' for windows
+        info_txt = os.path.join(self._annonation_direc, *filename.split(self.slash)[self.label_idx:] )  # swap base folder, changed '/' to '\\' for windows
         info_txt = os.path.splitext( info_txt )[0] + '.txt'   # swap extension
         info = read_txt_lines(info_txt)  
 
@@ -302,7 +306,7 @@ class AVDataset(object): # dataset for multi-modal training
 
     def _get_boundary(self, filename, raw_data):
         # read info txt file (to see duration of word, to be used to do temporal cropping)
-        info_txt = os.path.join(self._annonation_direc, *filename.split('\\')[self.label_idx:] )  # swap base folder, changed '/' to '\\' for windows
+        info_txt = os.path.join(self._annonation_direc, *filename.split(self.slash)[self.label_idx:] )  # swap base folder, changed '/' to '\\' for windows
         info_txt = os.path.splitext( info_txt )[0] + '.txt'   # swap extension
         info = read_txt_lines(info_txt)
 

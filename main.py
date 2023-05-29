@@ -35,6 +35,9 @@ from lipreading.optim_utils import get_optimizer, CosineScheduler
 from lipreading.dataloaders import get_data_loaders, get_preprocessing_pipelines, unit_test_data_loader
 from lipreading.dataset import mel_transform
 
+# gpu_num = torch.cuda.device_count()
+gpu_num = 1
+
 def load_args(default_config=None):
     parser = argparse.ArgumentParser(description='Pytorch Lipreading ')
     # -- dataset config
@@ -140,7 +143,7 @@ def evaluate(model, dset_loader, criterion):
                 input, lengths, labels = data
                 boundaries = None
             # for multiple gpus
-            lengths = [lengths[0]]*(len(lengths)//(torch.cuda.device_count()))
+            lengths = [lengths[0]]*(len(lengths)//(gpu_num))
 
             logits = model(input.unsqueeze(1).to(device), lengths=lengths, boundaries=boundaries)
             _, preds = torch.max(F.softmax(logits, dim=1).data, dim=1)
@@ -177,8 +180,8 @@ def multimodal_eval(model, dset_loader, criterion):
 
 
             # for multiple gpus
-            audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(torch.cuda.device_count()))
-            video_lengths = [video_lengths[0]]*(len(video_lengths)//(torch.cuda.device_count()))
+            audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(gpu_num))
+            video_lengths = [video_lengths[0]]*(len(video_lengths)//(gpu_num))
             temp = mel_transform(audio_data.detach()) 
             audio_data = audio_data.unsqueeze(1).to(device) 
             video_data = video_data.unsqueeze(1).to(device)
@@ -253,8 +256,8 @@ def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
         data_time.update(time.time() - end)
 
         #train for multiple gpus
-        audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(torch.cuda.device_count()))
-        video_lengths = [video_lengths[0]]*(len(video_lengths)//(torch.cuda.device_count()))
+        audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(gpu_num))
+        video_lengths = [video_lengths[0]]*(len(video_lengths)//(gpu_num))
         # --
     
         optimizer.zero_grad()
@@ -335,7 +338,7 @@ def train(model, dset_loader, criterion, epoch, optimizer, logger):
         data_time.update(time.time() - end)
 
         #train for multiple gpus
-        lengths = [lengths[0]]*(len(lengths)//(torch.cuda.device_count()))
+        lengths = [lengths[0]]*(len(lengths)//(gpu_num))
         # --
         input, labels_a, labels_b, lam = mixup_data(input, labels, args.alpha)
         labels_a, labels_b = labels_a.to(device), labels_b.to(device)
@@ -452,9 +455,9 @@ def main():
     # -- get model
     model = get_model_from_json()
 
-    print(torch.cuda.device_count())
+    # print(gpu_num)
     # -- check CUDA / Multiple device
-    if torch.cuda.device_count()>1:
+    if gpu_num>1:
         model = nn.DataParallel(model)
     
     model.to(device)
