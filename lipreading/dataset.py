@@ -433,6 +433,6 @@ def mel_transform(batch_data): ## transform audio_raw_data into mel_spectrogram 
     return mel_trans(batch_data)[:,:,:128]
 
 def audio_to_stft(batch_data): ## returns short-time fourier transform value
-    stft = torch.stft(batch_data, n_fft = 256, hop_length = 145,return_complex=True,onesided=False)
+    stft = torch.stft(batch_data, n_fft = 512, hop_length = 145,return_complex=True,onesided=False)
 
     return stft[:,:,:128]
