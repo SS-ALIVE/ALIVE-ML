@@ -153,7 +153,7 @@ class AddNoise(object):
     """Add SNR noise [-1, 1]
     """
     
-    def __init__(self, noise, snr_levels=[-5, 0, 5, 10, 15, 20, 9999]): 
+    def __init__(self, noise, snr_levels=[-5, 0, 5, 10, 15, 20,9999]): 
         assert noise.dtype in [np.float32, np.float64], "noise only supports float data type"
         
         self.noise = noise
