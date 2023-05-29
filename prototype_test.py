@@ -317,25 +317,26 @@ def multimodal_test(model,dset_loader,criterion):
             #print("running_stoi=",running_stoi)
             break #only first batch
         ##audio data->wav # [b,18450]
-        audio_data.detach_().cpu()
-        reconstructed_waveform.detach_().cpu()
-        original_waveform.detach_().cpu()
-        audio_data_stft.detach_().cpu()
-        logits.detach_().cpu()
-        audio_raw_stft.detach_().cpu()
+        audio_data = audio_data.detach().cpu()
+        reconstructed_waveform = reconstructed_waveform.detach().cpu()
+        original_waveform = original_waveform.detach().cpu()
+        audio_data_stft = audio_data_stft.detach().cpu()
+        logits=logits.detach().cpu()
+        audio_raw_stft=audio_raw_stft.detach().cpu()
 
         test_list=torch.randperm(args.batch_size)
         test_index = test_list[:5]
         test_path = './test_samples'
         for i,index in enumerate(test_index):
             torchaudio.save(f"{test_path}/input_audio_{i+1}.wav",audio_data[index],16000)
-            torchaudio.save(f"{test_path}/reconstructed_audio_{i+1}.wav",reconstructed_waveform[index],16000)
-            torchaudio.save(f"{test_path}/raw_audio_{i+1}.wav",original_waveform[index],16000)
+            torchaudio.save(f"{test_path}/reconstructed_audio_{i+1}.wav",reconstructed_waveform[index].unsqueeze(0),16000)
+            torchaudio.save(f"{test_path}/raw_audio_{i+1}.wav",original_waveform[index].unsqueeze(0),16000)
         ##spectrogram?->png [b,256,128]
         for i,index in enumerate(test_index):
             save_spectrogram(torch.abs(audio_data_stft[index]),f"{test_path}/input_spec_{i+1}.png")
             save_spectrogram(logits[index],f"{test_path}/reconstructed_spec{i+1}.png")
             save_spectrogram(torch.abs(audio_raw_stft[index]),f"{test_path}/raw_spec_{i+1}.png")
+            
         print("test_sample data saved!")
 
         # noised_waveform = torch.istft(audio_data_stft[14],n_fft=256,hop_length=145)
@@ -628,7 +629,7 @@ def main():
         # if test-time, performance on test partition and exit. Otherwise, performance on validation and continue (sanity check for reload)
         if args.test:
             if args.modality == "av":
-                acc_avg_test, loss_avg_test = multimodal_eval(model, dset_loaders['test'], criterion)    
+                #acc_avg_test, loss_avg_test = multimodal_eval(model, dset_loaders['test'], criterion)    
                 _,_, = multimodal_test(model,dset_loaders['test'],criterion)
             else:
                 acc_avg_test, loss_avg_test = evaluate(model, dset_loaders['test'], criterion)
