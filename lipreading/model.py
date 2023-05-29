@@ -10,6 +10,7 @@ from lipreading.models.densetcn import DenseTemporalConvNet
 from lipreading.models.swish import Swish
 from lipreading.models.FCN import FCN
 import torchaudio.transforms as transforms
+from lipreading.dataset import audio_to_stft
 
 # -- auxiliary functions
 def threeD_to_2D_tensor(x):
@@ -24,11 +25,6 @@ def _average_batch(x, lengths, B): #
 def _transposed_average_batch(x,lengths,B):
     return torch.stack([torch.mean(x[index][0:i,:],0) for index,i in enumerate(lengths)],0)
 
-def audio_to_spectrogram(batch_data):
-    stft = torch.stft(batch_data, n_fft = 2048, hop_length = 145) # 
-    #stft = torch.stft(batch_data, n_fft = 2048, hop_length = 145) # 
-
-    return stft[:,:1024,:128]
 
 class MultiscaleMultibranchTCN(nn.Module):
     def __init__(self, input_size, num_channels, num_classes, tcn_options, dropout, relu_type, dwpw=False):
@@ -355,15 +351,15 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
             )
         self.consensus_func = _transposed_average_batch
 
-        self.mel_transform = transforms.MelSpectrogram(
-                sample_rate = 16000,
-                n_fft=1024,
-                hop_length=145,
-                n_mels=128,
-                norm='slaney'
-            )
+        # self.mel_transform = transforms.MelSpectrogram(
+        #         sample_rate = 16000,
+        #         n_fft=1024,
+        #         hop_length=145,
+        #         n_mels=128,
+        #         norm='slaney'
+        #     )
 
-        # self.spec_transform = audio_to_spectrogram
+        self.spec_transform = audio_to_stft
 
         self.FCN = FCN(feature_dim = 3328) ##TODO need to specify how to pass feature dimension argument 
 
@@ -374,25 +370,30 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
     def forward(self, audio_data, video_data, audio_lengths, video_lengths, boundaries=None):
         if self.modality == "av":
 
+        
             # audio feature extraction
             # (B,1,18560)
             B, C, T = audio_data.size() ## audio is not normalized (-1,1)
+            audio_lengths = [audio_lengths[0]]*B
+            video_lengths = [video_lengths[0]]*B
             #print("audio_data - max",torch.max(audio_data))
             ## mel-spectogram generation
             # audio_data = (B,18560),normalized tensor #TODO : must isolate mel-spectogram generation from forward computation
             #print(torch.max(audio_data))
             
-            mel = self.mel_transform(audio_data.squeeze()) # generated mel-spectogram
+            stft = self.spec_transform(audio_data.squeeze())
+            spectrogram = torch.abs(stft)
+            #mel = self.mel_transform(audio_data.squeeze()) # generated mel-spectogram
             #print(torch.max(mel_spec))
             #print(mel_spec.shape)
             ###
             
             # (b,1,18560) (32,1,18560)
-            audio_data = audio_data.squeeze() ## normalize
-            mean = torch.mean(audio_data,dim=1,keepdim=True)
-            std = torch.std(audio_data,dim=1,keepdim=True)
-            audio_data = (audio_data - mean)/std 
-            audio_data = audio_data.unsqueeze(1)
+            # audio_data = audio_data.squeeze() ## normalize
+            # mean = torch.mean(audio_data,dim=1,keepdim=True)
+            # std = torch.std(audio_data,dim=1,keepdim=True)
+            # audio_data = (audio_data - mean)/std 
+            # audio_data = audio_data.unsqueeze(1)
             
             #print(torch.max(audio_data))
             audio_data = self.audio_trunk(audio_data)
@@ -419,9 +420,7 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
             #print("va_attention shape = ",va_attention.shape)
             av_attention = self.consensus_func(av_attention,audio_lengths,B) # temporal averaging -> (B,T,F) - > (B,F)
             va_attention = self.consensus_func(va_attention,video_lengths,B)  ## TODO : implement multi-gpu compatible code (related to lengths)
-            
             ava_attention = torch.cat((av_attention,va_attention),1) ## concatenate audio-visua, visual-audio attention (B,2*F)
-            #print(ava_attention.shape)
             ## FCN layer - generates Mask to apply with original audio's mel-spectogram
             mask = self.FCN(ava_attention) ## reconstruct mel-spectogram mask with U-NET : (B,1664) -> (B,1,128,128)
             #mel-spectogram..
@@ -429,7 +428,7 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
             # print("mask = ",mask.shape)
             # print("raw = ",mel.shape)
             
-            out = torch.mul(mask,mel[:,:,:128]) # element-wise multiplication (mask, original) - mel-spectogram
+            out = torch.mul(mask,spectrogram) # element-wise multiplication (mask, original) - mel-spectogram
 
             # print("out", out.shape)
             

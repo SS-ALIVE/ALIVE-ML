@@ -417,10 +417,10 @@ def av_pad_packed_collate(batch): ## our av collate function #TODO implement fas
     video_data = torch.FloatTensor(np.array(video_data_np))
     audio_raw_data = torch.FloatTensor(np.array(audio_raw_data))
     #audio_raw_mel = torch.FloatTensor(audio_raw_mel)
-    audio_raw_mel = mel_transform(audio_raw_data)
+    #audio_raw_mel = mel_transform(audio_raw_data)
+    audio_raw_stft = audio_to_stft(audio_raw_data)
 
-
-    return audio_data, video_data, audio_lengths, video_lengths, audio_raw_mel#,audio_raw_data # temp 
+    return audio_data, video_data, audio_lengths, video_lengths, audio_raw_stft#,audio_raw_data # temp 
 
 def mel_transform(batch_data): ## transform audio_raw_data into mel_spectrogram => something's wrong #TODO
     mel_trans = transforms.MelSpectrogram(
@@ -432,7 +432,7 @@ def mel_transform(batch_data): ## transform audio_raw_data into mel_spectrogram 
             )
     return mel_trans(batch_data)[:,:,:128]
 
-def audio_to_spectrogram(batch_data):
-    stft = torch.stft(batch_data, n_fft = 2048, hop_length = 145)
+def audio_to_stft(batch_data): ## returns short-time fourier transform value
+    stft = torch.stft(batch_data, n_fft = 256, hop_length = 145,return_complex=True,onesided=False)
 
-    return stft[:,:1024,:128, :]
+    return stft[:,:,:128]

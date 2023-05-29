@@ -5,7 +5,7 @@ class FCN(nn.Module):
     def __init__(self,feature_dim):
 
         super(FCN, self).__init__()
-        self.linear = nn.Linear(feature_dim,32*32)
+        self.linear = nn.Linear(feature_dim,64*32)
         self.block1 = nn.Sequential(
             nn.Conv2d(1,64, kernel_size=3, padding=1),
             nn.ReLU(),
@@ -42,7 +42,7 @@ class FCN(nn.Module):
 
     def forward(self, x):
         x = self.linear(x)
-        x = x.view(-1,1,32,32) # b,1024 -> b,1,32,32
+        x = x.view(-1,1,64,32) # b,1024 -> b,1,32,32
         x = self.block1(x)
         x1 = x # b,64,16,16
         # print("x1 : ", x1.shape)

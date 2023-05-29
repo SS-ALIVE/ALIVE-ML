@@ -124,7 +124,7 @@ def get_data_loaders(args):
 
 def unit_test_data_loader(args): ## unit test dataloader for multimodal(av) loading.
     preprocessing = get_preprocessing_pipelines(args.modality)
-    subset_indices = range(20000)  # Specify the indices for the desired subset
+    subset_indices = range(1066)  # Specify the indices for the desired subset
     if args.modality == "av":
         partitions = ['test'] if args.test else ['train','val','test']
         dsets = {partition:Subset(AVDataset(
