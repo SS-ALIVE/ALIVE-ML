@@ -4,7 +4,7 @@ import numpy as np
 import os
 
 __all__ = ['Compose', 'Normalize', 'CenterCrop', 'RgbToGray', 'RandomCrop',
-           'HorizontalFlip', 'AddNoise', 'NormalizeUtterance', 'TimeMask']
+           'HorizontalFlip', 'AddNoise', 'NormalizeUtterance', 'TimeMask', 'AddAudioNoise']
 
 
 class Compose(object):
@@ -188,15 +188,15 @@ class AddAudioNoise(object):
         pass
 
     def __call__(self, signal):
-        signal = signal['data'] # .npz to numpy array
+        # signal = signal['data'] # .npz to numpy array
 
         # find a random noise file
-        folder_path = '..\\datasets\\audio_data\\'
+        folder_path = './datasets/audio_data/'
         file_list = os.listdir(folder_path) 
         random_folder = random.choice(file_list)
-        file_list = os.listdir(folder_path+random_folder+"\\train\\")
+        file_list = os.listdir(folder_path+random_folder+"/train/")
         random_file = random.choice(file_list)
-        noise_data = np.load(random_file)['data']
+        noise_data = np.load(folder_path+random_folder+"/train/"+random_file)['data']
 
         src_len = len(signal)
         noise_len = len(noise_data)
@@ -211,7 +211,7 @@ class AddAudioNoise(object):
             noise_data = np.pad(noise_data, (start_time, 0), mode='constant', constant_values = 0)
         
         # noise의 크기 : 0~0.5 랜덤 값
-        noised_signal = signal + random.random()*0.5*noise_data
+        noised_signal = signal + random.random()*0.7*noise_data
         return noised_signal
     
 

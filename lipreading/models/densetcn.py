@@ -176,12 +176,12 @@ class DenseTemporalConvNet(nn.Module):
             self.features.add_module('denseblock%d' % (i + 1), block)
             num_features = num_features + num_layers * growth_rate_set[i]
 
-            #if i != len(block_config) - 1:
-            trans = _Transition(num_input_features=num_features,
-                                num_output_features=reduced_size,
-                                relu_type=relu_type)
-            self.features.add_module('transition%d' % (i + 1), trans)
-            num_features = reduced_size
+            if i != len(block_config) - 1:
+                trans = _Transition(num_input_features=num_features,
+                                    num_output_features=reduced_size,
+                                    relu_type=relu_type)
+                self.features.add_module('transition%d' % (i + 1), trans)
+                num_features = reduced_size
 
         # Final batch norm
         self.features.add_module('norm5', nn.BatchNorm1d(num_features))

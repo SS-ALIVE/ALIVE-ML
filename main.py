@@ -68,7 +68,7 @@ def load_args(default_config=None):
     parser.add_argument('--densetcn-se', default = False, action='store_true', help='If True, enable SE in DenseTCN')
     parser.add_argument('--densetcn-condense', default = False, action='store_true', help='If True, enable condenseTCN')
     # -- attention config
-    parser.add_argument('--attention-embed-dim', type=int, default = 512,  help='Attention layer input embedding size')
+    parser.add_argument('--attention-embed-dim', type=int, default = 1664,  help='Attention layer input embedding size')
     parser.add_argument('--attention-num-head', type=int, default = 8, help='Attention layer head num')
     parser.add_argument('--attention-dropout', type=float, default = 0.2, help='Attention layer dropout')
     # -- train
@@ -103,6 +103,8 @@ def load_args(default_config=None):
     parser.add_argument('--n-fft', type=int, default=512, help='n_fft for making spectrogram')
     parser.add_argument('--spectrogram-sample-rate', type=int, default=16000, help='sampling rate of spectrogram')
 
+    # -- sample path
+    parser.add_argument('--test-sample-path',type = str, default = None, help = "path to save sample")
 
     args = parser.parse_args()
     return args
@@ -165,7 +167,7 @@ def mel_to_wav(mel): ##TODO something's wrong with this (backward propagation pr
 
 def save_spectrogram(stft,path):
     plt.figure(figsize=(10, 10))
-    plt.imshow(stft[:129,:], aspect='auto', origin='lower')
+    plt.imshow(stft[:256,:], aspect='auto', origin='lower')
     plt.colorbar(format='%+2.0f dB')
     plt.title('Spectrogram')
     plt.xlabel('Time')
@@ -237,8 +239,12 @@ def multimodal_test(model,dset_loader,criterion):
             
             loss = criterion(logits,audio_raw_spec) # mse
             running_loss += loss.item() * audio_data.size(0)
-            reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
-            original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+
+            # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
+            # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+            reconstructed_waveform = torch.istft(torch.cat([logits*torch.exp(1j*audio_data_angle), torch.zeros(logits.size(0), 1, logits.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
+            original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2))], dim=1),n_fft=args.n_fft,hop_length=145)
+
             #print("reconstructed_waveform", reconstructed_waveform.shape)
             #print("original_waveform", original_waveform.shape)
             running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
@@ -253,9 +259,10 @@ def multimodal_test(model,dset_loader,criterion):
         logits=logits.detach().cpu()
         audio_raw_stft=audio_raw_stft.detach().cpu()
 
-        test_list=torch.randperm(args.batch_size)
-        test_index = test_list[:5]
-        test_path = './test_samples'
+        # test_list=torch.randperm(args.batch_size)
+        test_list = torch.tensor(range(10)) # for fixed result
+        test_index = test_list[:10]
+        test_path = args.test_sample_path
         for i,index in enumerate(test_index):
             torchaudio.save(f"{test_path}/input_audio_{i+1}.wav",audio_data[index],16000)
             torchaudio.save(f"{test_path}/reconstructed_audio_{i+1}.wav",reconstructed_waveform[index].unsqueeze(0),16000)
@@ -347,8 +354,12 @@ def multimodal_eval(model, dset_loader, criterion):
             
             loss = criterion(logits,audio_raw_spec) # mse
             running_loss += loss.item() * audio_data.size(0)
-            reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
-            original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+
+            # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
+            # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+            reconstructed_waveform = torch.istft(torch.cat([logits*torch.exp(1j*audio_data_angle), torch.zeros(logits.size(0), 1, logits.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
+            original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2))], dim=1),n_fft=args.n_fft,hop_length=145)
+
             #print("reconstructed_waveform", reconstructed_waveform.shape)
             #print("original_waveform", original_waveform.shape)
             running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)

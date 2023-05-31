@@ -365,7 +365,9 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
 
         self.spec_transform = audio_to_stft
 
-        self.FCN = FCN(feature_dim = 2048) ##TODO need to specify how to pass feature dimension argument 
+        #self.FCN = FCN(feature_dim = 6656) ##TODO need to specify how to pass feature dimension argument 
+    
+        self.FCN = FCN(feature_dim = attention_options['embed_dim'] * 4) # 2 self_attention, 2 cross_attention
 
         # -- initialize
         self._initialize_weights_randomly()
