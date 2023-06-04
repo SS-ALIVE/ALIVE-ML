@@ -19,6 +19,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import soundfile as sf
 from torchmetrics.audio.stoi import ShortTimeObjectiveIntelligibility
+from torchmetrics.audio.pesq import PerceptualEvaluationSpeechQuality
 import torchaudio.transforms as transforms
 import torchaudio
 
@@ -99,9 +100,11 @@ def load_args(default_config=None):
     parser.add_argument('--use-boundary', default=False, action='store_true', help='include hard border at the testing stage.')
     # -- Spectrogram config
     parser.add_argument('--spectrogram-hop-length', type=int, default=145, help='hop length of spectrogram')
-    parser.add_argument('--spectrogram-n-fft', type=int, default=2048, help='n_fft for making spectrogram')
+    parser.add_argument('--n-fft', type=int, default=256, help='n_fft for making spectrogram')
     parser.add_argument('--spectrogram-sample-rate', type=int, default=16000, help='sampling rate of spectrogram')
 
+    # -- sample path
+    parser.add_argument('--test-sample-path',type = str, default = None, help = "path to save sample")
 
     args = parser.parse_args()
     return args
@@ -162,17 +165,28 @@ def mel_to_wav(mel): ##TODO something's wrong with this (backward propagation pr
     waveform = invMel_trans(mel)
     return waveform
 
+def save_spectrogram(stft,path):
+    plt.figure(figsize=(10, 10))
+    plt.imshow(stft[:256,:], aspect='auto', origin='lower')
+    plt.colorbar(format='%+2.0f dB')
+    plt.title('Spectrogram')
+    plt.xlabel('Time')
+    plt.ylabel('Frequency')
+    plt.tight_layout()
+    plt.savefig(path)
+
+
 def spectrogram_to_wav(spectrogram):
     stft = torch.istft(spectrogram, n_fft = args.n_fft, hop_length = args.hop_length)
     return stft
 
-
-##TODO need to implement multimodal evaluate function
-def multimodal_eval(model, dset_loader, criterion):
+def multimodal_test(model,dset_loader,criterion):
     model.eval()
     running_loss = 0.
     running_stoi = 0.
+    running_pesq_wb = 0.
     stoi_metric = ShortTimeObjectiveIntelligibility(fs=16000,extended=False)
+    pesq_wb_metric = PerceptualEvaluationSpeechQuality(16000,'wb')
     with torch.no_grad():
         for batch_idx, data in enumerate(tqdm(dset_loader)):
             audio_data,video_data,audio_lengths,video_lengths,audio_raw_stft = data
@@ -186,7 +200,8 @@ def multimodal_eval(model, dset_loader, criterion):
             #audio_raw_angle = torch.angle(audio_raw_stft)
             audio_data_stft = audio_to_stft(audio_data)
             audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
-            audio_data = audio_data.unsqueeze(1).to(device) 
+            audio_data = audio_data.unsqueeze(1).to(device)
+            video_data = torch.zeros(video_data.shape) 
             video_data = video_data.unsqueeze(1).to(device)
             audio_raw_spec = audio_raw_spec.to(device)
             #print(audio_raw_stft.shape)
@@ -225,11 +240,132 @@ def multimodal_eval(model, dset_loader, criterion):
             
             loss = criterion(logits,audio_raw_spec) # mse
             running_loss += loss.item() * audio_data.size(0)
-            reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=256,hop_length=145)
-            original_waveform = torch.istft(audio_raw_stft,n_fft=256,hop_length=145)
+
+            # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
+            # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+            reconstructed_waveform = torch.istft(torch.cat([logits*torch.exp(1j*audio_data_angle), torch.zeros(logits.size(0), 1, logits.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
+            original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2))], dim=1),n_fft=args.n_fft,hop_length=145)
+
             #print("reconstructed_waveform", reconstructed_waveform.shape)
             #print("original_waveform", original_waveform.shape)
             running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
+            running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
+            #print("running_stoi=",running_stoi)
+            break #only first batch
+        ##audio data->wav # [b,18450]
+        audio_data = audio_data.detach().cpu()
+        reconstructed_waveform = reconstructed_waveform.detach().cpu()
+        original_waveform = original_waveform.detach().cpu()
+        audio_data_stft = audio_data_stft.detach().cpu()
+        logits=logits.detach().cpu()
+        audio_raw_stft=audio_raw_stft.detach().cpu()
+
+        # test_list=torch.randperm(args.batch_size)
+        test_list = torch.tensor(range(15)) # for fixed result
+        test_index = test_list[:15]
+        test_path = args.test_sample_path
+        for i,index in enumerate(test_index):
+            torchaudio.save(f"{test_path}/input_audio_{i+1}.wav",audio_data[index],16000)
+            torchaudio.save(f"{test_path}/reconstructed_audio_{i+1}.wav",reconstructed_waveform[index].unsqueeze(0),16000)
+            torchaudio.save(f"{test_path}/raw_audio_{i+1}.wav",original_waveform[index].unsqueeze(0),16000)
+        ##spectrogram?->png [b,256,128]
+        for i,index in enumerate(test_index):
+            save_spectrogram(torch.abs(audio_data_stft[index]),f"{test_path}/input_spec_{i+1}.png")
+            save_spectrogram(logits[index],f"{test_path}/reconstructed_spec{i+1}.png")
+            save_spectrogram(torch.abs(audio_raw_stft[index]),f"{test_path}/raw_spec_{i+1}.png")
+            
+        print("test_sample data saved!")
+
+        # noised_waveform = torch.istft(audio_data_stft[14],n_fft=256,hop_length=145)
+        # print(reconstructed_waveform.shape)
+        # print(original_waveform.shape)
+        # print(noised_waveform.shape)
+        # torchaudio.save('./reconstructed_waveform.wav',reconstructed_waveform.unsqueeze(0),16000)
+        # torchaudio.save('./original_waveform.wav',original_waveform.unsqueeze(0),16000)
+        # torchaudio.save('./noised_waveform.wav',noised_waveform.unsqueeze(0),16000)
+
+        # waveform1 = librosa.feature.inverse.mel_to_audio(logits[0].detach().cpu().numpy(),sr=16000,n_fft=1024 // 2 + 1,hop_length =145, htk=True) # i
+        # waveform2 = librosa.feature.inverse.mel_to_audio(temp[0].detach().cpu().numpy(),sr=16000,n_fft=1024 // 2 + 1,hop_length =145, htk=True)
+        # waveform3 = librosa.feature.inverse.mel_to_audio(audio_raw_stft[0].detach().cpu().numpy(),sr=16000,n_fft=1024 // 2 + 1,hop_length =145, htk=True)
+        
+        # sf.write('logit.wav', waveform1, 16000)
+        # sf.write('audio_noise.wav', waveform2, 16000)
+        # sf.write('audio_raw.wav',waveform3, 16000)
+
+    print(f"{len(dset_loader)} in total\tBATCH Avg. STOI: {running_stoi /len(dset_loader)} BATCH Avg. PESQ_WB: {running_pesq_wb / len(dset_loader)}")
+    return running_stoi/len(dset_loader), running_loss/len(dset_loader)
+
+##TODO need to implement multimodal evaluate function
+def multimodal_eval(model, dset_loader, criterion):
+    model.eval()
+    running_loss = 0.
+    running_stoi = 0.
+    running_pesq_wb = 0.
+    stoi_metric = ShortTimeObjectiveIntelligibility(fs=16000,extended=False)
+    pesq_wb_metric = PerceptualEvaluationSpeechQuality(16000,'wb')
+    with torch.no_grad():
+        for batch_idx, data in enumerate(tqdm(dset_loader)):
+            audio_data,video_data,audio_lengths,video_lengths,audio_raw_stft = data
+
+
+            # for multiple gpus
+            audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(gpu_num))
+            video_lengths = [video_lengths[0]]*(len(video_lengths)//(gpu_num))
+            #temp = mel_transform(audio_data.detach()) 
+            audio_raw_spec = torch.abs(audio_raw_stft)
+            #audio_raw_angle = torch.angle(audio_raw_stft)
+            audio_data_stft = audio_to_stft(audio_data)
+            audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
+            audio_data = audio_data.unsqueeze(1).to(device) 
+            video_data = video_data.unsqueeze(1).to(device)
+            #video_data = torch.zeros(video_data.shape)
+            audio_raw_spec = audio_raw_spec.to(device)
+            #print(audio_raw_stft.shape)
+            logits = model(audio_data,video_data, audio_lengths,video_lengths)
+            # audio_raw_stft.requires_grad = True
+            # logits.requires_grad = True
+            # label_wav = mel_to_wav(audio_raw_stft)
+            # pred_wav = mel_to_wav(logits)
+            # plt.figure(figsize=(10, 4))
+            # plt.imshow(torch.log(temp.detach().cpu()[0]), aspect='auto', origin='lower')
+            # plt.colorbar(format='%+2.0f dB')
+            # plt.title('Mel Spectrogram')
+            # plt.xlabel('Frames')
+            # plt.ylabel('Mel Filterbanks')
+            # plt.tight_layout()
+            # plt.savefig('./audio_noise_mel.png')
+            # plt.figure(figsize=(10, 4))
+            # plt.imshow(torch.log(logits.detach().cpu()[0]), aspect='auto', origin='lower')
+            # plt.colorbar(format='%+2.0f dB')
+            # plt.title('Mel Spectrogram')
+            # plt.xlabel('Frames')
+            # plt.ylabel('Mel Filterbanks')
+            # plt.tight_layout()
+            # plt.savefig('./logits.png')
+            # plt.figure(figsize=(10, 4))
+            # plt.imshow(torch.log(audio_raw_stft.detach().cpu()[0]), aspect='auto', origin='lower')
+            # plt.colorbar(format='%+2.0f dB')
+            # plt.title('Mel Spectrogram')
+            # plt.xlabel('Frames')
+            # plt.ylabel('Mel Filterbanks')
+            # plt.tight_layout()
+            # plt.savefig('./audio_raw_stft.png')
+
+            
+            #exit()
+            
+            loss = criterion(logits,audio_raw_spec) # mse
+            running_loss += loss.item() * audio_data.size(0)
+
+            # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
+            # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+            reconstructed_waveform = torch.istft(torch.cat([logits*torch.exp(1j*audio_data_angle), torch.zeros(logits.size(0), 1, logits.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
+            original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2))], dim=1),n_fft=args.n_fft,hop_length=145)
+
+            #print("reconstructed_waveform", reconstructed_waveform.shape)
+            #print("original_waveform", original_waveform.shape)
+            running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
+            running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
             #print("running_stoi=",running_stoi)
         
         # noised_waveform = torch.istft(audio_data_stft[14],n_fft=256,hop_length=145)
@@ -248,7 +384,7 @@ def multimodal_eval(model, dset_loader, criterion):
         # sf.write('audio_noise.wav', waveform2, 16000)
         # sf.write('audio_raw.wav',waveform3, 16000)
 
-    print(f"{len(dset_loader)} in total\tBATCH Avg. STOI: {running_stoi /len(dset_loader)}")
+    print(f"{len(dset_loader)} in total\tBATCH Avg. STOI: {running_stoi /len(dset_loader)} BATCH Avg. PESQ_WB: {running_pesq_wb / len(dset_loader)}")
     return running_stoi/len(dset_loader), running_loss/len(dset_loader)
         
 
@@ -481,13 +617,13 @@ def main():
     
     model.to(device)
     ## model size check
-    # tot_param = sum(p.numel()for p in model.parameters())
-    # print("total_params = ",tot_param)
+    tot_param = sum(p.numel()for p in model.parameters())
+    print("total_params = ",tot_param)
     # exit()
     
     # -- get dataset iterators
-    dset_loaders = get_data_loaders(args) 
-    #dset_loaders = unit_test_data_loader(args) # using subset of dataset (currently 48032)
+    #dset_loaders = get_data_loaders(args) 
+    dset_loaders = unit_test_data_loader(args) # using subset of dataset (currently 48032)
     # -- get loss function
     criterion = nn.MSELoss() if args.modality =="av" else nn.CrossEntropyLoss() 
     # -- get optimizer
@@ -515,7 +651,8 @@ def main():
         # if test-time, performance on test partition and exit. Otherwise, performance on validation and continue (sanity check for reload)
         if args.test:
             if args.modality == "av":
-                acc_avg_test, loss_avg_test = multimodal_eval(model, dset_loaders['test'], criterion)    
+                #acc_avg_test, loss_avg_test = multimodal_eval(model, dset_loaders['test'], criterion)    
+                acc_avg_test,loss_avg_test = multimodal_test(model,dset_loaders['test'],criterion)
             else:
                 acc_avg_test, loss_avg_test = evaluate(model, dset_loaders['test'], criterion)
             logger.info(f"Test-time performance on partition {'test'}: Loss: {loss_avg_test:.4f}\tAcc:{acc_avg_test:.4f}")
@@ -541,7 +678,7 @@ def main():
         # -- save checkpoint
         save_dict = {
             'epoch_idx': epoch + 1,
-            'model_state_dict': model.state_dict(),
+            'model_state_dict': model.module.state_dict() if gpu_num>1 else model.state_dict(), # model.module.state_dict()
             'optimizer_state_dict': optimizer.state_dict()
         }
         ckpt_saver.save(save_dict, acc_avg_val)
