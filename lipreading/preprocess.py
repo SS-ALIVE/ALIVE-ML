@@ -2,9 +2,10 @@ import cv2
 import random
 import numpy as np
 import os
+import random
 
 __all__ = ['Compose', 'Normalize', 'CenterCrop', 'RgbToGray', 'RandomCrop',
-           'HorizontalFlip', 'AddNoise', 'NormalizeUtterance', 'TimeMask', 'AddAudioNoise']
+           'HorizontalFlip', 'AddNoise', 'NormalizeUtterance', 'TimeMask', 'AddAudioNoise', 'AddRandomNoise']
 
 
 class Compose(object):
@@ -201,7 +202,7 @@ class AddAudioNoise(object):
         src_len = len(signal)
         noise_len = len(noise_data)
 
-        start_time = random.randint(-noise_len, src_len) # 겹치는 위치
+        start_time = random.randint(-noise_len // 2, src_len // 2) # 겹치는 위치
 
         if start_time < 0:
             noise_data = noise_data[-start_time:]
@@ -248,3 +249,27 @@ class TimeMask():
             else:
                 cloned[t_zero:mask_end] = cloned.mean()
         return cloned
+
+class AddRandomNoise():
+    def __init__(self, noise, snr_levels=[-5, 0, 5, 10, 15, 20,9999]): 
+        assert noise.dtype in [np.float32, np.float64], "noise only supports float data type"
+        
+        self.noise = noise
+        self.snr_levels = snr_levels
+
+        self.babble = AddNoise(noise=np.load('./data/babbleNoise_resample_16K.npy'))
+        self.person = AddAudioNoise()
+
+    def get_power(self, clip):
+        clip2 = clip.copy()
+        clip2 = clip2 **2
+        return np.sum(clip2) / (len(clip2) * 1.0)
+
+    def __call__(self, signal):
+
+        if (random.random() > 0.5):
+            return self.babble(signal)
+
+        else:
+            return self.person(signal)
+

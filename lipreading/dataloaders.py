@@ -42,7 +42,6 @@ def get_preprocessing_pipelines(modality):
         crop_size = (88, 88)
         (mean, std) = (0.421, 0.165)
         video_preprocessing['train'] = Compose([
-                                    Normalize( 0.0,255.0 ),
                                     RandomCrop(crop_size),
                                     HorizontalFlip(0.5),
                                     Normalize(mean, std),
@@ -58,8 +57,9 @@ def get_preprocessing_pipelines(modality):
         
 
         audio_preprocessing['train'] = Compose([
-                                    AddAudioNoise(),
-                                    AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
+                                    # AddAudioNoise(),
+                                    # AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
+                                    AddRandomNoise(noise=np.load('./data/babbleNoise_resample_16K.npy')),
                                     NormalizeUtterance()])
 
         audio_preprocessing['val'] = Compose([
@@ -68,8 +68,9 @@ def get_preprocessing_pipelines(modality):
                                     NormalizeUtterance()])
 
         audio_preprocessing['test'] = Compose([
-                                    AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
                                     AddAudioNoise(),
+                                    AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
+                                    AddRandomNoise(noise=np.load('./data/babbleNoise_resample_16K.npy')),
                                     NormalizeUtterance()])
 
 

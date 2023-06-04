@@ -100,7 +100,7 @@ def load_args(default_config=None):
     parser.add_argument('--use-boundary', default=False, action='store_true', help='include hard border at the testing stage.')
     # -- Spectrogram config
     parser.add_argument('--spectrogram-hop-length', type=int, default=145, help='hop length of spectrogram')
-    parser.add_argument('--n-fft', type=int, default=512, help='n_fft for making spectrogram')
+    parser.add_argument('--n-fft', type=int, default=256, help='n_fft for making spectrogram')
     parser.add_argument('--spectrogram-sample-rate', type=int, default=16000, help='sampling rate of spectrogram')
 
     # -- sample path
@@ -200,7 +200,8 @@ def multimodal_test(model,dset_loader,criterion):
             #audio_raw_angle = torch.angle(audio_raw_stft)
             audio_data_stft = audio_to_stft(audio_data)
             audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
-            audio_data = audio_data.unsqueeze(1).to(device) 
+            audio_data = audio_data.unsqueeze(1).to(device)
+            video_data = torch.zeros(video_data.shape) 
             video_data = video_data.unsqueeze(1).to(device)
             audio_raw_spec = audio_raw_spec.to(device)
             #print(audio_raw_stft.shape)
@@ -260,8 +261,8 @@ def multimodal_test(model,dset_loader,criterion):
         audio_raw_stft=audio_raw_stft.detach().cpu()
 
         # test_list=torch.randperm(args.batch_size)
-        test_list = torch.tensor(range(10)) # for fixed result
-        test_index = test_list[:10]
+        test_list = torch.tensor(range(15)) # for fixed result
+        test_index = test_list[:15]
         test_path = args.test_sample_path
         for i,index in enumerate(test_index):
             torchaudio.save(f"{test_path}/input_audio_{i+1}.wav",audio_data[index],16000)
@@ -317,6 +318,7 @@ def multimodal_eval(model, dset_loader, criterion):
             audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
             audio_data = audio_data.unsqueeze(1).to(device) 
             video_data = video_data.unsqueeze(1).to(device)
+            #video_data = torch.zeros(video_data.shape)
             audio_raw_spec = audio_raw_spec.to(device)
             #print(audio_raw_stft.shape)
             logits = model(audio_data,video_data, audio_lengths,video_lengths)
@@ -615,8 +617,8 @@ def main():
     
     model.to(device)
     ## model size check
-    # tot_param = sum(p.numel()for p in model.parameters())
-    # print("total_params = ",tot_param)
+    tot_param = sum(p.numel()for p in model.parameters())
+    print("total_params = ",tot_param)
     # exit()
     
     # -- get dataset iterators
@@ -676,7 +678,7 @@ def main():
         # -- save checkpoint
         save_dict = {
             'epoch_idx': epoch + 1,
-            'model_state_dict': model.state_dict(),
+            'model_state_dict': model.module.state_dict() if gpu_num>1 else model.state_dict(), # model.module.state_dict()
             'optimizer_state_dict': optimizer.state_dict()
         }
         ckpt_saver.save(save_dict, acc_avg_val)

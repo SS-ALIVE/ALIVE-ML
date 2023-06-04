@@ -556,14 +556,15 @@ def get_model_from_json():
     return model
 
 def save_spectrogram(stft,path):
-    plt.figure(figsize=(10, 4))
-    plt.imshow(stft, aspect='auto', origin='lower')
+    plt.figure(figsize=(4, 10))
+    plt.imshow(stft[:129,:], aspect='auto', origin='lower')
     plt.colorbar(format='%+2.0f dB')
     plt.title('Spectrogram')
     plt.xlabel('Time')
     plt.ylabel('Frequency')
     plt.tight_layout()
     plt.savefig(path)
+
 def main():
 
     # -- logging

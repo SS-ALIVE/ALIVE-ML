@@ -125,12 +125,44 @@ class AVCrosssAttention(nn.Module):
         self.av_cross_attention = nn.MultiheadAttention(embed_dim = self.embed_dim, num_heads = self.num_heads, dropout = self.dropout ,batch_first=True) # cross-modality feature
         self.va_cross_attention = nn.MultiheadAttention(embed_dim = self.embed_dim, num_heads = self.num_heads, dropout = self.dropout ,batch_first=True)
 
+        self.a_feedforward_layer = nn.Sequential(
+            nn.Linear(1664, 2048),
+            Swish(),
+            nn.Linear(2048, 1664)
+        )
+
+        self.v_feedforward_layer = nn.Sequential(
+            nn.Linear(1664, 2048),
+            Swish(),
+            nn.Linear(2048, 1664)
+        )
+
+        self.av_feedforward_layer = nn.Sequential(
+            nn.Linear(1664, 2048),
+            Swish(),
+            nn.Linear(2048, 1664)
+        )
+
+        self.va_feedforward_layer = nn.Sequential(
+            nn.Linear(1664, 2048),
+            Swish(),
+            nn.Linear(2048, 1664)
+        )
+
+
     def forward(self,audio_feature,video_feature):
         a_self_attention = self.a_self_attention(audio_feature,audio_feature,audio_feature)[0]
         v_self_attention = self.v_self_attention(video_feature,video_feature,video_feature)[0]
         av_attention = self.av_cross_attention(video_feature, audio_feature, video_feature)[0] # return attention value
         va_attention = self.va_cross_attention(audio_feature, video_feature, audio_feature)[0] 
-        return av_attention, va_attention, a_self_attention,v_self_attention
+        
+        a_feedforward = self.a_feedforward_layer(a_self_attention) + a_self_attention
+        v_feedforward = self.v_feedforward_layer(v_self_attention) + v_self_attention
+        av_feedforward = self.av_feedforward_layer(av_attention) + av_attention
+        va_feedforward = self.va_feedforward_layer(va_attention) + va_attention
+
+        # return av_attention, va_attention, a_self_attention,v_self_attention
+        return av_feedforward, va_feedforward, a_feedforward, v_feedforward
 
 
 class Lipreading(nn.Module):
@@ -382,6 +414,7 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
             B, C, T = audio_data.size() ## audio is not normalized (-1,1)
             audio_lengths = [audio_lengths[0]]*B
             video_lengths = [video_lengths[0]]*B
+        
             #print("audio_data - max",torch.max(audio_data))
             ## mel-spectogram generation
             # audio_data = (B,18560),normalized tensor #TODO : must isolate mel-spectogram generation from forward computation
@@ -421,8 +454,11 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
             
             audio_data = audio_data.transpose(1,2)
             video_data = video_data.transpose(1,2)
-
+            
+        
             av_attention, va_attention,a_self_attention,v_self_attention = self.cross_attention(audio_data, video_data) # self attention & cross-attention
+            #print(av_attention, va_attention,a_self_attention,v_self_attention)
+            #exit()    
             #print("av_attention shape = ",av_attention.shape)
             #print("va_attention shape = ",va_attention.shape)
             a_self_attention = self.consensus_func(a_self_attention,audio_lengths,B)
@@ -430,15 +466,20 @@ class AVLipreading(nn.Module): ## new model - audio-visual cross attention
             av_attention = self.consensus_func(av_attention,audio_lengths,B) # temporal averaging -> (B,T,F) - > (B,F)
             va_attention = self.consensus_func(va_attention,video_lengths,B)  #
             ava_attention = torch.cat((av_attention,va_attention,a_self_attention,v_self_attention),1) ## concatenate audio-visua, visual-audio attention (B,2*F)
+            #print(ava_attention)
+            #exit()
             ## FCN layer - generates Mask to apply with original audio's mel-spectogram
+            
             mask = self.FCN(ava_attention) ## reconstruct mel-spectogram mask with U-NET : (B,1664) -> (B,1,128,128)
             #mel-spectogram..
             mask = mask.squeeze()
+        
+        
             # print("mask = ",mask.shape)
             # print("raw = ",mel.shape)
             
             out = torch.mul(mask,spectrogram) # element-wise multiplication (mask, original) - mel-spectogram
-
+            
             # print("out", out.shape)
             
         return out
