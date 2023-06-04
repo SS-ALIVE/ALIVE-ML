@@ -189,7 +189,7 @@ def get_save_folder( args):
     # create save and log folder
     save_path = '{}/{}'.format( args.logging_dir, args.training_mode )
     save_path += '/' + datetime.datetime.now().isoformat().split('.')[0]
-    save_path = save_path.replace(":", ";")
+    save_path = save_path.replace(":", "-")
     if not os.path.isdir(save_path):
         os.makedirs(save_path)
     return save_path
