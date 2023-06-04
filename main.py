@@ -21,7 +21,7 @@ import soundfile as sf
 from torchmetrics.audio.stoi import ShortTimeObjectiveIntelligibility
 import torchaudio.transforms as transforms
 import torchaudio
-
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 from lipreading.utils import get_save_folder
 from lipreading.utils import load_json, save2npz
@@ -486,8 +486,8 @@ def main():
     # exit()
     
     # -- get dataset iterators
-    dset_loaders = get_data_loaders(args) 
-    #dset_loaders = unit_test_data_loader(args) # using subset of dataset (currently 48032)
+    #dset_loaders = get_data_loaders(args) 
+    dset_loaders = unit_test_data_loader(args) # using subset of dataset (currently 48032)
     # -- get loss function
     criterion = nn.MSELoss() if args.modality =="av" else nn.CrossEntropyLoss() 
     # -- get optimizer
