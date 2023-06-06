@@ -165,6 +165,30 @@ class AVCrossAttention(nn.Module):
         # return av_attention, va_attention, a_self_attention,v_self_attention
         return av_feedforward, va_feedforward, a_feedforward, v_feedforward
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_seq_len):
+        super(PositionalEncoding, self).__init__()
+        self.d_model = d_model
+        self.max_seq_len = max_seq_len
+
+        # Create a matrix of shape (max_seq_len, d_model) to store the positional encodings
+        self.positional_encodings = self._generate_positional_encodings()
+
+    def _generate_positional_encodings(self):
+        pe = torch.zeros(self.max_seq_len, self.d_model)
+        position = torch.arange(0, self.max_seq_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * (-math.log(10000.0) / self.d_model))
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        return pe.unsqueeze(0)
+
+    def forward(self, x):
+        # Add positional encodings to the input tensor
+        x = x + self.positional_encodings[:, :x.size(1), :].to(x.device)
+        return x
+
 class CrossAttention(nn.Module):
     def __init__(self, embed_dim, num_heads):
         super(CrossAttention,self).__init__()
@@ -566,8 +590,11 @@ class Seperator_Block(nn.Module):
             nn.BatchNorm1d(d_model),
             Swish()
         )
+        self.positional_encodings = PositionalEncoding(d_model = d_model, max_seq_len = 30)
     def forward(self, x):
         audio,video = x
+        audio = self.positional_encodings(audio)
+        video = self.positional_encodings(video)
         encoded_audio = self.audio_encoder(audio)
         encoded_video = self.video_encoder(video)
         
@@ -680,10 +707,10 @@ class AVLipreading_sep(nn.Module):
 
         self.spec_transform = audio_to_stft
 
-        #self.phase_FCN = FCN(feature_dim = 512) ##TODO need to specify how to pass feature dimension argument 
-        #self.amplitude_FCN = FCN(feature_dim = 512)
-        self.phase_ESPCN = ESPCN(feature_dim = seperator_options['d_model'])
-        self.amplitude_ESPCN = ESPCN(feature_dim = seperator_options['d_model'])
+        self.phase_FCN = FCN(feature_dim = 512) ##TODO need to specify how to pass feature dimension argument 
+        self.amplitude_FCN = FCN(feature_dim = 512)
+        #self.phase_ESPCN = ESPCN(feature_dim = seperator_options['d_model'])
+        #self.amplitude_ESPCN = ESPCN(feature_dim = seperator_options['d_model'])
         #self.FCN = FCN(feature_dim = attention_options['embed_dim'] * 4) # 2 self_attention, 2 cross_attention
 
         # -- initialize
@@ -720,8 +747,10 @@ class AVLipreading_sep(nn.Module):
             out = self.seperator(audio_data,video_data) # B, T, 512
             # print("out", out)
             out = self.consensus_func(out,audio_lengths,B) ##B,512
-            phase_feature = self.phase_ESPCN(out)
-            amplitude_feature = self.phase_ESPCN(out)
+            # phase_feature = self.phase_ESPCN(out)
+            # amplitude_feature = self.phase_ESPCN(out)
+            phase_feature = self.phase_FCN(out)
+            amplitude_feature = self.phase_FCN(out)
 
             return phase_feature,amplitude_feature
             # b 512 -> b 4096 -> b 64 64 -> b 32 32 16-> b 16 16 64 -> b 8 8 256 -> nn.pixelshuffle b 128 128

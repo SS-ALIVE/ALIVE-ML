@@ -30,7 +30,7 @@ def get_optimizer(args, model):
                             {'params' : other_param, 'lr':args.lr}]
             optimizer = optim.AdamW(param_groups,weight_decay = 1e-2)
             return optimizer
-        optimizer = optim.AdamW(param_groups, lr=args.lr, weight_decay=1e-2)
+        optimizer = optim.AdamW(optim_policies, lr=args.lr, weight_decay=1e-2)
     elif args.optimizer == 'sgd':
         optimizer = optim.SGD(optim_policies, lr=args.lr, weight_decay=1e-4, momentum=0.9)
     else:
