@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import torchaudio
 import json
-from lipreading.model import AVLipreading
+from lipreading.model import AVLipreading, AVLipreading_sep
 from moviepy.editor import VideoFileClip, AudioFileClip
 def load_args(default_config=None):
     parser = argparse.ArgumentParser(description='Pytorch Lipreading ')
@@ -81,8 +81,10 @@ def load_args(default_config=None):
     parser.add_argument('--spectrogram-sample-rate', type=int, default=16000, help='sampling rate of spectrogram')
 
     # -- sample path
-    parser.add_argument('--test-sample-path',type = str, default = None, help = "path to save sample")
+    parser.add_argument('--test-sample-path',type = str, default = './final.mp4', help = "path to save sample")
     parser.add_argument('--video-path',type=str,default=None,help ="path to inference video")
+    parser.add_argument('--transformer', default=False, action='store_true', help='use avsep ')
+
     args = parser.parse_args()
     return args
 
@@ -131,7 +133,7 @@ def video_preprocessing(video_path):
         if not ret:
             break
         # Convert the frame to grayscale for face detection
-        frame = cv2.resize(frame,(224,224))
+        frame = cv2.resize(frame,(500,500))
 
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         # Detect faces in the grayscale frame
@@ -162,15 +164,17 @@ def video_preprocessing(video_path):
             video_frames.append(face_roi)
             # Display the face ROI
             #cv2.imshow('Face ROI', face_roi)
-
+        #if len(faces)==0:
+            #video_frames.append(frame[])
+            
             # Draw a rectangle around the face in the frame
             #cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_width, roi_y + roi_height), (0, 255, 0), 2)
         # Display the frame
         #cv2.imshow('Mouth ROI', frame)
 
         # Exit the loop if the 'q' key is pressed
-        #if cv2.waitKey(1) & 0xFF == ord('q'):
-        # break
+        # if cv2.waitKey(1) & 0xFF == ord('q'):
+        #     break
     #print(video_frame.shape)
     #print(audio_data.shape) ## [291643] --> [,16000] / 15*(640*29) + (640*20)
     #print(video_frame)
@@ -205,16 +209,18 @@ def inference(model,video_data,audio_data):
     audio_lengths =[18560]*(len(audio_data))
     video_lengths = [29]*(len(video_data))
 
-    audio_data_stft = audio_to_stft(audio_data)
+    audio_data_stft = audio_to_stft(audio_data).to(device)
     audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
-    audio_data = audio_data.unsqueeze(1).to(device)
-    video_data = torch.zeros(video_data.shape) 
+    audio_data = audio_data.unsqueeze(1).to(device) 
     video_data = video_data.unsqueeze(1).to(device)
-    #print(video_data)
-    #print(audio_data)
+    #print(audio_raw_stft.shape)
     logits = model(audio_data,video_data, audio_lengths,video_lengths)
-    # print(logits.shape)
-    # print(logits)
+    if args.transformer:
+        phase,amplitude = logits
+        #amplitude = torch.max(torch.abs(audio_data_stft)) * amplitude ## rescale amplitdue to original 
+        pred_mask = torch.polar(amplitude,phase * np.pi * 2)
+        reconstructed_waveform = torch.istft(torch.cat([audio_data_stft*pred_mask.squeeze(), torch.zeros(pred_mask.size(0), 1, pred_mask.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
+        return reconstructed_waveform
     reconstructed_waveform = torch.istft(torch.cat([logits*torch.exp(1j*audio_data_angle), torch.zeros(logits.size(0), 1, logits.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
     #ouptut 
     # shell
@@ -262,6 +268,25 @@ def get_model_from_json():
             'num_heads' : args.attention_num_head,
             'dropout' : args.attention_dropout,
         }
+        if args.transformer:
+            seperator_options={
+                "d_model" :512,
+                "n_head" : 8,
+                "num_layers" : [2,3]
+            }
+            model = AVLipreading_sep( modality=args.modality,
+                        num_classes=args.num_classes,
+                        tcn_options=tcn_options,
+                        densetcn_options=densetcn_options,
+                        attention_options=attention_options,
+                        seperator_options = seperator_options,
+                        backbone_type=args.backbone_type,
+                        relu_type=args.relu_type,
+                        width_mult=args.width_mult,
+                        use_boundary=args.use_boundary,
+                        extract_feats=args.extract_feats
+                        )
+            return model
         model = AVLipreading( modality=args.modality,
                         num_classes=args.num_classes,
                         tcn_options=tcn_options,
@@ -325,7 +350,7 @@ def main():
     cat=reconstructed_waveform.reshape(1,-1)
     print(cat)
     torchaudio.save('./inference_audio/sample.wav',cat.detach().cpu(),16000)
-    save_video('./test_output.mp4','./inference_audio/sample.wav','./final.mp4')
+    save_video('./test_output.mp4','./inference_audio/sample.wav',args.test_sample_path)
     print("done!")
     # end = time.time()-  start
     # print(f'elapsed time={end}')

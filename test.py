@@ -16,4 +16,6 @@
 # print(stoi(preds,target)) # output - original
 # print(stoi(original,target)) # noise - original)
 # print(stoi(preds,original)) # output - noise
-print(488766%200)
+import torch
+print(torch.randn(3,2).max())
+print(torch.max(torch.randn(3,2)))
