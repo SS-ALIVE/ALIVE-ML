@@ -22,7 +22,7 @@ from torchmetrics.audio.stoi import ShortTimeObjectiveIntelligibility
 from torchmetrics.audio.pesq import PerceptualEvaluationSpeechQuality
 import torchaudio.transforms as transforms
 import torchaudio
-
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 from lipreading.utils import get_save_folder
 from lipreading.utils import load_json, save2npz
