@@ -28,7 +28,7 @@ mpmath==1.3.0
 msgpack==1.0.5
 networkx==3.1
 numba==0.57.0
-numpy @ file:///home/conda/feedstock_root/build_artifacts/numpy_1682210193659/work
+#numpy @ file:///croot/numpy_and_numpy_base_1682520569166/work
 nvidia-cublas-cu11==11.10.3.66
 nvidia-cuda-cupti-cu11==11.7.101
 nvidia-cuda-nvrtc-cu11==11.7.99
@@ -40,7 +40,6 @@ nvidia-cusolver-cu11==11.4.0.1
 nvidia-cusparse-cu11==11.7.4.91
 nvidia-nccl-cu11==2.14.3
 nvidia-nvtx-cu11==11.7.91
-opencv-python==4.7.0
 packaging==23.1
 pesq==0.0.4
 Pillow==9.5.0
@@ -65,7 +64,7 @@ torch==2.0.1
 torchaudio==2.0.2
 torchmetrics==0.11.4
 torchvision==0.15.2
-tqdm @ file:///croot/tqdm_1679561862951/work
+#tqdm @ file:///croot/tqdm_1679561862951/work
 triton==2.0.0
 typing_extensions==4.6.1
 urllib3==2.0.2

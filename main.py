@@ -212,7 +212,7 @@ def multimodal_test(model,dset_loader,criterion): # TODO make it compatible with
                 audio_raw_stft = audio_to_stft(audio_raw_data, 1024, 640, False, 29).to(device)
                 audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29)
                 #print(audio_raw_stft.shape)
-                logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_raw_stft)
+                logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_data_stft)
                 audio_raw_stft = torch.complex(audio_raw_stft[:,:,:,0], audio_raw_stft[:,:,:,1])
             else:
                 audio_raw_stft = audio_to_stft(audio_raw_data, 256, 145, True, 128).to(device)
@@ -365,7 +365,7 @@ def multimodal_eval(model, dset_loader, criterion):
                 audio_raw_stft = audio_to_stft(audio_raw_data, 1024, 640, False, 29).to(device)
                 audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29)
                 #print(audio_raw_stft.shape)
-                logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_raw_stft)
+                logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_data_stft)
                 audio_raw_stft = torch.complex(audio_raw_stft[:,:,:,0], audio_raw_stft[:,:,:,1])
             else:
                 audio_raw_stft = audio_to_stft(audio_raw_data, 256, 145, True, 128).to(device)
@@ -518,7 +518,7 @@ def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
             audio_raw_stft = audio_to_stft(audio_raw_data, 1024, 640, False, 29).to(device)
             audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29)
             #print(audio_raw_stft.shape)
-            logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_raw_stft)
+            logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_data_stft)
             audio_raw_stft = torch.complex(audio_raw_stft[:,:,:,0], audio_raw_stft[:,:,:,1])
         else:
             audio_raw_stft = audio_to_stft(audio_raw_data, 256, 145, True, 128).to(device)
