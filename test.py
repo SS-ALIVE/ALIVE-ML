@@ -16,6 +16,7 @@
 # print(stoi(preds,target)) # output - original
 # print(stoi(original,target)) # noise - original)
 # print(stoi(preds,original)) # output - noise
-import torch
-print(torch.randn(3,2).max())
-print(torch.max(torch.randn(3,2)))
+#import torch
+#print(torch.randn(3,2).max())
+#print(torch.max(torch.randn(3,2)))
+print("conda")

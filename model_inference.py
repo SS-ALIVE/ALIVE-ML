@@ -82,7 +82,7 @@ def load_args(default_config=None):
 
     # -- sample path
     parser.add_argument('--test-sample-path',type = str, default = './final.mp4', help = "path to save sample")
-    parser.add_argument('--video-path',type=str,default=None,help ="path to inference video")
+    parser.add_argument('--video-path',type=str,default='./test_video.mp4',help ="path to inference video")
     parser.add_argument('--transformer', default=False, action='store_true', help='use avsep ')
 
     args = parser.parse_args()
@@ -94,8 +94,8 @@ np.random.seed(1)
 random.seed(1)
 torch.backends.cudnn.benchmark = True
 # device detection - cuda or cpu
-#device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-device = "cpu"
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+#device = "cpu"
 
 
 def video_preprocessing(video_path):
@@ -123,7 +123,7 @@ def video_preprocessing(video_path):
     roi_w,roi_h = 0,0
     video_frames=deque()
     frame_count=0
-
+    face_count = 0
     while True:
         # Read a frame
         print(f'frame_count={len(video_frames)}, processing..')
@@ -133,17 +133,21 @@ def video_preprocessing(video_path):
         if not ret:
             break
         # Convert the frame to grayscale for face detection
-        frame = cv2.resize(frame,(500,500))
+        #frame = cv2.resize(frame,(500,500))
 
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         # Detect faces in the grayscale frame
         faces = detector(frame)
+        if len(faces)==0:
+            video_frames.append(cv2.resize(frame,(88,88)))
+            continue
         if roi_w==0 and roi_h==0:
             x, y, w, h = faces[0].left(), faces[0].top(), faces[0].width(), faces[0].height()
             roi_w = w 
             roi_h = h
         # Iterate through the detected faces
         for face in faces:
+            face_count+=1
             # Extract the mouth region from the face bounding box
             x, y, w, h = face.left(), face.top(), face.width(), face.height()
 
@@ -163,9 +167,8 @@ def video_preprocessing(video_path):
             face_roi = cv2.resize(face_roi,(88,88))
             video_frames.append(face_roi)
             # Display the face ROI
-            #cv2.imshow('Face ROI', face_roi)
-        #if len(faces)==0:
-            #video_frames.append(frame[])
+            cv2.imshow('Face ROI', face_roi)
+        
             
             # Draw a rectangle around the face in the frame
             #cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_width, roi_y + roi_height), (0, 255, 0), 2)
@@ -173,14 +176,15 @@ def video_preprocessing(video_path):
         #cv2.imshow('Mouth ROI', frame)
 
         # Exit the loop if the 'q' key is pressed
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     break
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
     #print(video_frame.shape)
     #print(audio_data.shape) ## [291643] --> [,16000] / 15*(640*29) + (640*20)
     #print(video_frame)
     # Release the video capture and close all windows
     video.release()
     cv2.destroyAllWindows()
+    print("nimyeonsang!=",face_count)
 
     #make video processable (batch)
     video_frames = torch.tensor(np.array(video_frames)) ## [455,96,96] 
@@ -338,19 +342,19 @@ def save_video(video_path,audio_path,save_path):
 def main():
     start = time.time()
     model = get_model_from_json()
-    #model = torch.nn.DataParallel(model)
+    model = torch.nn.DataParallel(model)
     assert args.model_path, f"must specify model path."
     model = load_model(args.model_path,model,allow_size_mismatch=args.allow_size_mismatch)
     model.to(device)
     print("model loaded!")
     video_data,audio_data = video_preprocessing(args.video_path)
     reconstructed_waveform = inference(model,video_data,audio_data)
-    print(reconstructed_waveform.shape)
-    print(reconstructed_waveform)
+    #print(reconstructed_waveform.shape)
+    #print(reconstructed_waveform)
     cat=reconstructed_waveform.reshape(1,-1)
-    print(cat)
-    torchaudio.save('./inference_audio/sample.wav',cat.detach().cpu(),16000)
-    save_video('./test_output.mp4','./inference_audio/sample.wav',args.test_sample_path)
+    #print(cat)
+    torchaudio.save('./sample.wav',cat.detach().cpu(),16000)
+    save_video('./test_output.mp4','./sample.wav',args.test_sample_path)
     print("done!")
     # end = time.time()-  start
     # print(f'elapsed time={end}')

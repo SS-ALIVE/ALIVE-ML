@@ -210,58 +210,75 @@ def multimodal_test(model,dset_loader,criterion): # TODO make it compatible with
             audio_raw_spec = audio_raw_spec.to(device)
             #print(audio_raw_stft.shape)
             logits = model(audio_data,video_data, audio_lengths,video_lengths)
-            #print(audio_raw_stft.shape)            # audio_raw_stft.requires_grad = True
-            # logits.requires_grad = True
-            # label_wav = mel_to_wav(audio_raw_stft)
-            # pred_wav = mel_to_wav(logits)
-            # plt.figure(figsize=(10, 4))
-            # plt.imshow(torch.log(temp.detach().cpu()[0]), aspect='auto', origin='lower')
-            # plt.colorbar(format='%+2.0f dB')
-            # plt.title('Mel Spectrogram')
-            # plt.xlabel('Frames')
-            # plt.ylabel('Mel Filterbanks')
-            # plt.tight_layout()
-            # plt.savefig('./audio_noise_mel.png')
-            # plt.figure(figsize=(10, 4))
-            # plt.imshow(torch.log(logits.detach().cpu()[0]), aspect='auto', origin='lower')
-            # plt.colorbar(format='%+2.0f dB')
-            # plt.title('Mel Spectrogram')
-            # plt.xlabel('Frames')
-            # plt.ylabel('Mel Filterbanks')
-            # plt.tight_layout()
-            # plt.savefig('./logits.png')
-            # plt.figure(figsize=(10, 4))
-            # plt.imshow(torch.log(audio_raw_stft.detach().cpu()[0]), aspect='auto', origin='lower')
-            # plt.colorbar(format='%+2.0f dB')
-            # plt.title('Mel Spectrogram')
-            # plt.xlabel('Frames')
-            # plt.ylabel('Mel Filterbanks')
-            # plt.tight_layout()
-            # plt.savefig('./audio_raw_stft.png')
+            if args.transformer:
+                phase,amplitude = logits
 
             
-            #exit()
-            
-            loss = criterion(logits,audio_raw_spec) # mse
+                #audio_data_stft = torch.where(torch.abs(audio_data_stft) == 0, 1.0 + 0j ,audio_data_stft)
+                # gt_mask = audio_raw_stft / audio_data_stft #A~ phi 0~2pi
+                
+                # gt_real,gt_imag = torch.real(gt_mask),torch.imag(gt_mask)
+
+                
+                #amplitude = torch.max(torch.abs(audio_data_stft)) * amplitude ## rescale amplitdue to original 
+                # print("amplitude", amplitude[0])
+                pred_mask = torch.polar(amplitude,phase * np.pi * 2)
+                pred_out = audio_data_stft *  pred_mask.squeeze()
+                pred_real,pred_imag = torch.real(pred_out),torch.imag(pred_out)
+                gt_real,gt_imag = torch.real(audio_raw_stft),torch.imag(audio_raw_stft)
+
+                # print("pred_mask", pred_mask[0])
+                #pred_real,pred_imag = torch.real(pred_mask),torch.imag(pred_mask)
+                real_loss = criterion(pred_real.squeeze(),gt_real)
+                # print("real_loss", real_loss)
+                imag_loss = criterion(pred_imag.squeeze(),gt_imag)
+                # print("imag_loss", imag_loss)
+                loss = real_loss + imag_loss
+            else:
+                
+                
+                loss = criterion(logits,audio_raw_spec) # mse
             running_loss += loss.item() * audio_data.size(0)
 
-            # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
-            # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
-            reconstructed_waveform = torch.istft(torch.cat([logits*torch.exp(1j*audio_data_angle), torch.zeros(logits.size(0), 1, logits.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
-            original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2))], dim=1),n_fft=args.n_fft,hop_length=145)
+            if args.transformer:
 
-            #print("reconstructed_waveform", reconstructed_waveform.shape)
-            #print("original_waveform", original_waveform.shape)
-            running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
-            running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
-            #print("running_stoi=",running_stoi)
-            break #only first batch
+                # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
+                # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+                # print(audio_data_stft.shape)
+                # print(pred_mask.shape)
+                reconstructed_waveform = torch.istft(torch.cat([pred_out, torch.zeros(pred_mask.size(0), 1, pred_mask.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
+                original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2)).to(device)], dim=1),n_fft=args.n_fft,hop_length=145)
+
+                #print("reconstructed_waveform", reconstructed_waveform.shape)
+                #print("original_waveform", original_waveform.shape)
+                running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
+                running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
+                #print("running_stoi=",running_stoi)
+
+
+
+            else:
+
+                # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
+                # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+                reconstructed_waveform = torch.istft(torch.cat([logits*torch.exp(1j*audio_data_angle), torch.zeros(logits.size(0), 1, logits.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
+                original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2)).to(device)], dim=1),n_fft=args.n_fft,hop_length=145)
+
+                #print("reconstructed_waveform", reconstructed_waveform.shape)
+                #print("original_waveform", original_waveform.shape)
+                running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
+                running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
+                #print("running_stoi=",running_stoi)
+            break
         ##audio data->wav # [b,18450]
         audio_data = audio_data.detach().cpu()
         reconstructed_waveform = reconstructed_waveform.detach().cpu()
         original_waveform = original_waveform.detach().cpu()
         audio_data_stft = audio_data_stft.detach().cpu()
-        logits=logits.detach().cpu()
+        if args.transformer:
+            logits=torch.abs(pred_out).detach().cpu()
+        else:
+            logits=logits.detach().cpu()
         audio_raw_stft=audio_raw_stft.detach().cpu()
 
         # test_list=torch.randperm(args.batch_size)
