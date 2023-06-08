@@ -29,7 +29,7 @@ from lipreading.utils import load_json, save2npz
 from lipreading.utils import load_model, CheckpointSaver
 from lipreading.utils import get_logger, update_logger_batch
 from lipreading.utils import showLR, calculateNorm2, AverageMeter
-from lipreading.model import Lipreading, AVLipreading, AVLipreading_sep
+from lipreading.model import Lipreading, AVLipreading, AVLipreading_sep, AVLipreading_sep_unet
 from lipreading.mixup import mixup_data, mixup_criterion
 from lipreading.optim_utils import get_optimizer, CosineScheduler
 from lipreading.dataloaders import get_data_loaders, get_preprocessing_pipelines, unit_test_data_loader
@@ -75,8 +75,8 @@ def load_args(default_config=None):
     parser.add_argument('--training-mode', default='tcn', help='tcn')
     parser.add_argument('--batch-size', type=int, default=32, help='Mini-batch size')
     parser.add_argument('--optimizer',type=str, default='adamw', choices = ['adam','sgd','adamw'])
-    parser.add_argument('--lr', default=3e-2, type=float, help='initial learning rate')
-    parser.add_argument('--lr-sep', default=3e-3, type=float, help='initial learning rate for seperator')
+    parser.add_argument('--lr', default=5e-4, type=float, help='initial learning rate')
+    parser.add_argument('--lr-sep', default=5e-4, type=float, help='initial learning rate for seperator')
     parser.add_argument('--init-epoch', default=0, type=int, help='epoch to start at')
     parser.add_argument('--epochs', default=80, type=int, help='number of epochs')
     parser.add_argument('--test', default=False, action='store_true', help='training mode')
@@ -109,6 +109,12 @@ def load_args(default_config=None):
 
     ## -- use AVSep
     parser.add_argument('--transformer', default=False, action='store_true', help='use avsep ')
+    parser.add_argument('--unet', default=True, action='store_true', help="use unet")
+
+    # -- loss type
+    parser.add_argument('--loss-type', default="coordinate", type = str, help="loss type : phase or coordinate")
+    
+
     args = parser.parse_args()
     return args
 
@@ -192,55 +198,62 @@ def multimodal_test(model,dset_loader,criterion): # TODO make it compatible with
     pesq_wb_metric = PerceptualEvaluationSpeechQuality(16000,'wb')
     with torch.no_grad():
         for batch_idx, data in enumerate(tqdm(dset_loader)):
-            audio_data,video_data,audio_lengths,video_lengths,audio_raw_stft = data
+            audio_data,video_data,audio_lengths,video_lengths,audio_raw_data = data
 
 
             # for multiple gpus
             audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(gpu_num))
             video_lengths = [video_lengths[0]]*(len(video_lengths)//(gpu_num))
             #temp = mel_transform(audio_data.detach()) 
-            audio_raw_spec = torch.abs(audio_raw_stft)
-            #audio_raw_angle = torch.angle(audio_raw_stft)
-            audio_data_stft = audio_to_stft(audio_data).to(device)
-            audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
+            
             audio_data = audio_data.unsqueeze(1).to(device) 
             video_data = video_data.unsqueeze(1).to(device)
-            audio_raw_stft = audio_raw_stft.to(device)
-            #video_data = torch.zeros(video_data.shape)
-            audio_raw_spec = audio_raw_spec.to(device)
-            #print(audio_raw_stft.shape)
-            logits = model(audio_data,video_data, audio_lengths,video_lengths)
-            if args.transformer:
-                phase,amplitude = logits
-
-                noise_angle,noise_amplitude = torch.angle(audio_data_stft),torch.abs(audio_data_stft)
-                #audio_data_stft = torch.where(torch.abs(audio_data_stft) == 0, 1.0 + 0j ,audio_data_stft)
-                # gt_mask = audio_raw_stft / audio_data_stft #A~ phi 0~2pi
+            if args.unet:
+                audio_raw_stft = audio_to_stft(audio_raw_data, 1024, 640, False, 29).to(device)
+                audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29)
+                #print(audio_raw_stft.shape)
+                logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_raw_stft)
+                audio_raw_stft = torch.complex(audio_raw_stft[:,:,:,0], audio_raw_stft[:,:,:,1])
+            else:
+                audio_raw_stft = audio_to_stft(audio_raw_data, 256, 145, True, 128).to(device)
+                audio_data_stft = audio_to_stft(audio_data.squeeze(), 256, 145, True, 128)
+                #print(audio_raw_stft.shape)
+                logits = model(audio_data,video_data, audio_lengths,video_lengths)
                 
-                # gt_real,gt_imag = torch.real(gt_mask),torch.imag(gt_mask)
+            audio_raw_spec = torch.abs(audio_raw_stft)
+            audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
+            
+            if args.transformer: # changed to reconstruction
+                if args.loss_type == "phase":
+                    phase,amplitude = logits
 
-                
-                #amplitude = torch.max(torch.abs(audio_data_stft)) * amplitude ## rescale amplitdue to original 
-                # print("amplitude", amplitude[0])
-                #pred_mask = torch.polar(amplitude,phase * np.pi * 2)
-                #pred_out = audio_data_stft * pred_mask.squeeze()
-                #pred_angle, pred_amplitude = torch.angle(pred_out), torch.abs(pred_out)
-                pred_angle,pred_amplitude = phase.squeeze()* np.pi * 2+noise_angle , noise_amplitude*amplitude.squeeze()
-                gt_angle,gt_amplitude = torch.angle(audio_raw_stft), torch.abs(audio_raw_stft)
-                pred_out = torch.polar(pred_amplitude,pred_angle)
-                # pred_out = audio_data_stft *  pred_mask.squeeze()
-                # pred_real,pred_imag = torch.real(pred_out),torch.imag(pred_out)
-                # gt_real,gt_imag = torch.real(audio_raw_stft),torch.imag(audio_raw_stft)
-                angle_loss = criterion(pred_angle,gt_angle)
-                amplitude_loss = criterion(pred_amplitude,gt_amplitude)
-                # print("pred_mask", pred_mask[0])
-                #pred_real,pred_imag = torch.real(pred_mask),torch.imag(pred_mask)
-                #real_loss = criterion(pred_real.squeeze(),gt_real)
-                # print("real_loss", real_loss)
-                #imag_loss = criterion(pred_imag.squeeze(),gt_imag)
-                # print("imag_loss", imag_loss)
-                #loss = real_loss + imag_loss
-                loss = angle_loss + amplitude_loss
+                    noise_angle,noise_amplitude = torch.angle(audio_data_stft),torch.abs(audio_data_stft)
+
+                    pred_angle,pred_amplitude = phase.squeeze()* np.pi * 2+noise_angle , noise_amplitude*amplitude.squeeze()
+                    # pred_angle, pred_amplitude = phase.squeeze()* np.pi * 2, amplitude.squeeze()
+                    gt_angle, gt_amplitude = torch.angle(audio_raw_stft), torch.abs(audio_raw_stft)
+                    
+                    pred_out = torch.polar(pred_amplitude,pred_angle)
+
+                    angle_loss = criterion(pred_angle,gt_angle)
+                    amplitude_loss = criterion(pred_amplitude,gt_amplitude)
+
+                    loss = angle_loss + amplitude_loss
+                else:
+                    pred_real_mask, pred_imag_mask = logits
+                    noise_real, noise_imag = torch.real(audio_data_stft), torch.imag(audio_data_stft)
+
+
+                    pred_real, pred_imag = (noise_real * pred_real_mask) - (noise_imag * pred_imag_mask), (noise_real * pred_imag_mask) + (noise_imag * pred_real_mask)
+                    gt_real, gt_imag = torch.real(audio_raw_stft), torch.imag(audio_raw_stft)
+                    
+                    pred_out = torch.complex(pred_real, pred_imag)
+
+                    real_loss = criterion(pred_real,gt_real)
+                    imag_loss = criterion(pred_imag,gt_imag)
+
+                    loss = real_loss + imag_loss
+
             else:
                 
                 
@@ -249,31 +262,35 @@ def multimodal_test(model,dset_loader,criterion): # TODO make it compatible with
 
             if args.transformer:
 
-                # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
-                # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
-                # print(audio_data_stft.shape)
-                # print(pred_mask.shape)
-                reconstructed_waveform = torch.istft(torch.cat([pred_out, torch.zeros(pred_angle.size(0), 1, pred_angle.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
-                original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2)).to(device)], dim=1),n_fft=args.n_fft,hop_length=145)
+                if args.unet:
 
-                #print("reconstructed_waveform", reconstructed_waveform.shape)
-                #print("original_waveform", original_waveform.shape)
-                running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
-                running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
-                #print("running_stoi=",running_stoi)
+                    # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
+                    # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+                    # print(audio_data_stft.shape)
+                    # print(pred_mask.shape)
+                    reconstructed_waveform = torch.istft(torch.cat([pred_out, torch.zeros(pred_out.size(0), 1, pred_out.size(2)).to(device)], dim=1).to(device),n_fft=1024,hop_length=640)
+                    original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2)).to(device)], dim=1),n_fft=1024,hop_length=640)
 
-            else:
+                    #print("reconstructed_waveform", reconstructed_waveform.shape)
+                    #print("original_waveform", original_waveform.shape)
+                    running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
+                    running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
+                    #print("running_stoi=",running_stoi)
+                    
+                else:
+                    # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
+                    # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+                    # print(audio_data_stft.shape)
+                    # print(pred_mask.shape)
+                    reconstructed_waveform = torch.istft(torch.cat([pred_out, torch.zeros(pred_out.size(0), 1, pred_out.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
+                    original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2)).to(device)], dim=1),n_fft=args.n_fft,hop_length=145)
 
-                # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
-                # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
-                reconstructed_waveform = torch.istft(torch.cat([logits*torch.exp(1j*audio_data_angle), torch.zeros(logits.size(0), 1, logits.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
-                original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2))], dim=1),n_fft=args.n_fft,hop_length=145)
-
-                #print("reconstructed_waveform", reconstructed_waveform.shape)
-                #print("original_waveform", original_waveform.shape)
-                running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
-                running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
-                #print("running_stoi=",running_stoi)
+                    #print("reconstructed_waveform", reconstructed_waveform.shape)
+                    #print("original_waveform", original_waveform.shape)
+                    running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
+                    running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
+                    #print("running_stoi=",running_stoi)
+                    
             break
         ##audio data->wav # [b,18450]
         audio_data = audio_data.detach().cpu()
@@ -332,55 +349,63 @@ def multimodal_eval(model, dset_loader, criterion):
     pesq_wb_metric = PerceptualEvaluationSpeechQuality(16000,'wb')
     with torch.no_grad():
         for batch_idx, data in enumerate(tqdm(dset_loader)):
-            audio_data,video_data,audio_lengths,video_lengths,audio_raw_stft = data
+            audio_data,video_data,audio_lengths,video_lengths,audio_raw_data = data
 
 
             # for multiple gpus
             audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(gpu_num))
             video_lengths = [video_lengths[0]]*(len(video_lengths)//(gpu_num))
             #temp = mel_transform(audio_data.detach()) 
-            audio_raw_spec = torch.abs(audio_raw_stft)
+            
             #audio_raw_angle = torch.angle(audio_raw_stft)
-            audio_data_stft = audio_to_stft(audio_data).to(device)
-            audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
+            
             audio_data = audio_data.unsqueeze(1).to(device) 
             video_data = video_data.unsqueeze(1).to(device)
-            audio_raw_stft = audio_raw_stft.to(device)
-            #video_data = torch.zeros(video_data.shape)
-            audio_raw_spec = audio_raw_spec.to(device)
-            #print(audio_raw_stft.shape)
-            logits = model(audio_data,video_data, audio_lengths,video_lengths)
-            if args.transformer:
-                phase,amplitude = logits
-
-                noise_angle,noise_amplitude = torch.angle(audio_data_stft),torch.abs(audio_data_stft)
-                #audio_data_stft = torch.where(torch.abs(audio_data_stft) == 0, 1.0 + 0j ,audio_data_stft)
-                # gt_mask = audio_raw_stft / audio_data_stft #A~ phi 0~2pi
+            if args.unet:
+                audio_raw_stft = audio_to_stft(audio_raw_data, 1024, 640, False, 29).to(device)
+                audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29)
+                #print(audio_raw_stft.shape)
+                logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_raw_stft)
+                audio_raw_stft = torch.complex(audio_raw_stft[:,:,:,0], audio_raw_stft[:,:,:,1])
+            else:
+                audio_raw_stft = audio_to_stft(audio_raw_data, 256, 145, True, 128).to(device)
+                audio_data_stft = audio_to_stft(audio_data.squeeze(), 256, 145, True, 128)
+                #print(audio_raw_stft.shape)
+                logits = model(audio_data,video_data, audio_lengths,video_lengths)
                 
-                # gt_real,gt_imag = torch.real(gt_mask),torch.imag(gt_mask)
+            audio_raw_spec = torch.abs(audio_raw_stft)
+            audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
+            
+            if args.transformer: 
+                if args.loss_type == "phase":
+                    phase,amplitude = logits
 
-                
-                #amplitude = torch.max(torch.abs(audio_data_stft)) * amplitude ## rescale amplitdue to original 
-                # print("amplitude", amplitude[0])
-                #pred_mask = torch.polar(amplitude,phase * np.pi * 2)
-                #pred_out = audio_data_stft * pred_mask.squeeze()
-                #pred_angle, pred_amplitude = torch.angle(pred_out), torch.abs(pred_out)
-                pred_angle,pred_amplitude = (phase.squeeze()* np.pi * 2) +noise_angle , noise_amplitude*amplitude.squeeze()
-                gt_angle,gt_amplitude = torch.angle(audio_raw_stft), torch.abs(audio_raw_stft)
-                pred_out = torch.polar(pred_amplitude,pred_angle)
-                # pred_out = audio_data_stft *  pred_mask.squeeze()
-                # pred_real,pred_imag = torch.real(pred_out),torch.imag(pred_out)
-                # gt_real,gt_imag = torch.real(audio_raw_stft),torch.imag(audio_raw_stft)
-                angle_loss = criterion(pred_angle,gt_angle)
-                amplitude_loss = criterion(pred_amplitude,gt_amplitude)
-                # print("pred_mask", pred_mask[0])
-                #pred_real,pred_imag = torch.real(pred_mask),torch.imag(pred_mask)
-                #real_loss = criterion(pred_real.squeeze(),gt_real)
-                # print("real_loss", real_loss)
-                #imag_loss = criterion(pred_imag.squeeze(),gt_imag)
-                # print("imag_loss", imag_loss)
-                #loss = real_loss + imag_loss
-                loss = angle_loss + amplitude_loss
+                    noise_angle,noise_amplitude = torch.angle(audio_data_stft),torch.abs(audio_data_stft)
+
+                    pred_angle,pred_amplitude = phase.squeeze()* np.pi * 2+noise_angle , noise_amplitude*amplitude.squeeze()
+                    # pred_angle, pred_amplitude = phase.squeeze()* np.pi * 2, amplitude.squeeze()
+                    gt_angle, gt_amplitude = torch.angle(audio_raw_stft), torch.abs(audio_raw_stft)
+                    
+                    pred_out = torch.polar(pred_amplitude,pred_angle)
+
+                    angle_loss = criterion(pred_angle,gt_angle)
+                    amplitude_loss = criterion(pred_amplitude,gt_amplitude)
+
+                    loss = angle_loss + amplitude_loss
+                else:
+                    pred_real_mask, pred_imag_mask = logits
+                    noise_real, noise_imag = torch.real(audio_data_stft), torch.imag(audio_data_stft)
+
+                    pred_real, pred_imag = (noise_real * pred_real_mask) - (noise_imag * pred_imag_mask), (noise_real * pred_imag_mask) + (noise_imag * pred_real_mask)
+                    gt_real, gt_imag = torch.real(audio_raw_stft), torch.imag(audio_raw_stft)
+
+                    pred_out = torch.complex(pred_real, pred_imag)
+
+
+                    real_loss = criterion(pred_real,gt_real)
+                    imag_loss = criterion(pred_imag,gt_imag)
+
+                    loss = real_loss + imag_loss
             else:
                 
                 
@@ -388,19 +413,35 @@ def multimodal_eval(model, dset_loader, criterion):
             running_loss += loss.item() * audio_data.size(0)
 
             if args.transformer:
+                
+                if args.unet:
 
-                # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
-                # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
-                # print(audio_data_stft.shape)
-                # print(pred_mask.shape)
-                reconstructed_waveform = torch.istft(torch.cat([pred_out, torch.zeros(pred_angle.size(0), 1, pred_angle.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
-                original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2)).to(device)], dim=1),n_fft=args.n_fft,hop_length=145)
+                    # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
+                    # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+                    # print(audio_data_stft.shape)
+                    # print(pred_mask.shape)
+                    reconstructed_waveform = torch.istft(torch.cat([pred_out, torch.zeros(pred_out.size(0), 1, pred_out.size(2)).to(device)], dim=1).to(device),n_fft=1024,hop_length=640)
+                    original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2)).to(device)], dim=1),n_fft=1024,hop_length=640)
 
-                #print("reconstructed_waveform", reconstructed_waveform.shape)
-                #print("original_waveform", original_waveform.shape)
-                running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
-                running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
-                #print("running_stoi=",running_stoi)
+                    #print("reconstructed_waveform", reconstructed_waveform.shape)
+                    #print("original_waveform", original_waveform.shape)
+                    running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
+                    running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
+                    #print("running_stoi=",running_stoi)
+                    
+                else:
+                    # reconstructed_waveform = torch.istft(logits*torch.exp(1j*audio_data_angle).to(device),n_fft=args.n_fft,hop_length=145)
+                    # original_waveform = torch.istft(audio_raw_stft,n_fft=args.n_fft,hop_length=145)
+                    # print(audio_data_stft.shape)
+                    # print(pred_mask.shape)
+                    reconstructed_waveform = torch.istft(torch.cat([pred_out, torch.zeros(pred_out.size(0), 1, pred_out.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
+                    original_waveform = torch.istft(torch.cat([audio_raw_stft, torch.zeros(audio_raw_stft.size(0), 1, audio_raw_stft.size(2)).to(device)], dim=1),n_fft=args.n_fft,hop_length=145)
+
+                    #print("reconstructed_waveform", reconstructed_waveform.shape)
+                    #print("original_waveform", original_waveform.shape)
+                    running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
+                    running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
+                    #print("running_stoi=",running_stoi)
 
 
 
@@ -455,7 +496,7 @@ def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
 
     end = time.time()
     for batch_idx, data in enumerate(dset_loader):
-        audio_data,video_data,audio_lengths,video_lengths,audio_raw_stft = data
+        audio_data,video_data,audio_lengths,video_lengths,audio_raw_data = data
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -472,68 +513,49 @@ def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
         audio_data = audio_data.unsqueeze(1).to(device)
         video_data = video_data.unsqueeze(1).to(device)
 
-        audio_raw_stft = audio_raw_stft.to(device)
-        #print(audio_raw_stft.shape)
-        logits = model(audio_data,video_data, audio_lengths,video_lengths)
+        
+        if args.unet:
+            audio_raw_stft = audio_to_stft(audio_raw_data, 1024, 640, False, 29).to(device)
+            audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29)
+            #print(audio_raw_stft.shape)
+            logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_raw_stft)
+            audio_raw_stft = torch.complex(audio_raw_stft[:,:,:,0], audio_raw_stft[:,:,:,1])
+        else:
+            audio_raw_stft = audio_to_stft(audio_raw_data, 256, 145, True, 128).to(device)
+            audio_data_stft = audio_to_stft(audio_data.squeeze(), 256, 145, True, 128)
+            #print(audio_raw_stft.shape)
+            logits = model(audio_data,video_data, audio_lengths,video_lengths)
 
         if args.transformer:
-            phase,amplitude = logits
+            if args.loss_type == "phase":
+                phase,amplitude = logits
 
-            audio_stft = audio_to_stft(audio_data.squeeze())
-            noise_angle,noise_amplitude = torch.angle(audio_stft),torch.abs(audio_stft)
-            #audio_stft = torch.where(torch.abs(audio_stft) == 0, 1.0 + 0j ,audio_stft)
-            #gt_mask = audio_raw_stft / audio_stft #A~ phi 0~2pi
-            
-            #gt_real,gt_imag = torch.real(gt_mask),torch.imag(gt_mask)
-            
-            
+                noise_angle,noise_amplitude = torch.angle(audio_data_stft),torch.abs(audio_data_stft)
 
-            #amplitude = torch.max(torch.abs(audio_stft)) * amplitude ## rescale amplitdue to original 
-            # print("amplitude", amplitude[0])
-            #pred_mask = torch.polar(amplitude,phase * np.pi * 2)
-            # print("pred_mask", pred_mask[0])
-            #pred_real,pred_imag = torch.real(pred_mask),torch.imag(pred_mask)
-            # print("pred_real", pred_real.squeeze().shape)
-            # print("pred_real", pred_real.dtype)
-            # print("pred_real", pred_real[0])
-            # print("pred_real", torch.any(torch.isnan(pred_real)))
+                pred_angle,pred_amplitude = phase.squeeze()* np.pi * 2+noise_angle , noise_amplitude*amplitude.squeeze()
+                # pred_angle, pred_amplitude = phase.squeeze()* np.pi * 2, amplitude.squeeze()
+                gt_angle, gt_amplitude = torch.angle(audio_raw_stft), torch.abs(audio_raw_stft)
+                
+                pred_out = torch.polar(pred_amplitude,pred_angle)
 
-            # print("pred_imag", pred_imag.squeeze().shape)
-            # print("pred_imag", pred_imag.dtype)
-            # print("pred_imag", pred_imag[0])
-            # print("pred_imag", torch.any(torch.isnan(pred_imag)))
-           
-            # print("gt_real", gt_real.shape)
-            # print("gt_real", gt_real.dtype)
-            # print("gt_real", gt_real[0])
-            # print("gt_real", torch.any(torch.isnan(gt_real)))
+                angle_loss = criterion(pred_angle,gt_angle)
+                amplitude_loss = criterion(pred_amplitude,gt_amplitude)
 
-            # print("gt_imag", gt_imag.shape)
-            # print("gt_imag", gt_imag.dtype)
-            # print("gt_imag", gt_imag[0])
-            # print("gt_imag", torch.any(torch.isnan(gt_imag)))
+                loss = angle_loss + amplitude_loss
+            else:
+                pred_real_mask, pred_imag_mask = logits
+                noise_real, noise_imag = torch.real(audio_data_stft), torch.imag(audio_data_stft)
 
 
+                pred_real, pred_imag = (noise_real * pred_real_mask) - (noise_imag * pred_imag_mask), (noise_real * pred_imag_mask) + (noise_imag * pred_real_mask)
+                gt_real, gt_imag = torch.real(audio_raw_stft), torch.imag(audio_raw_stft)
+                
+                pred_out = torch.complex(pred_real, pred_imag)
 
-            # print("sub", torch.any(torch.isnan(gt_real - pred_real)))
-            # print("sub", torch.any(torch.isnan(gt_imag - pred_imag)))
-            # print(audio_stft.shape)
-            # print(pred_mask.shape)
-            
-            pred_angle, pred_amplitude = noise_angle + phase.squeeze() * np.pi * 2 ,noise_amplitude*amplitude.squeeze()
-            gt_angle,gt_amplitude = torch.angle(audio_raw_stft), torch.abs(audio_raw_stft)
-            # pred_real,pred_imag = torch.real(pred_out),torch.imag(pred_out)
-            # gt_real,gt_imag = torch.real(audio_raw_stft),torch.imag(audio_raw_stft)
+                real_loss = criterion(pred_real,gt_real)
+                imag_loss = criterion(pred_imag,gt_imag)
 
-            #print(gt_real[0])
-            #real_loss = criterion(pred_real.squeeze(),gt_real) # 1~23
-            angle_loss = criterion(pred_angle,gt_angle)
-            amplitude_loss = criterion(pred_amplitude,gt_amplitude)
-            # print("real_loss", real_loss)
-            #imag_loss = criterion(pred_imag.squeeze(),gt_imag) # 0.00!~4
-            # print("imag_loss", imag_loss)
-            #loss = real_loss + imag_loss
-            loss = angle_loss + amplitude_loss
+                loss = real_loss + imag_loss
             #print(loss)
             #real + image /
             loss.backward() 
@@ -677,6 +699,26 @@ def get_model_from_json():
             'num_heads' : args.attention_num_head,
             'dropout' : args.attention_dropout,
         }
+        if args.unet:
+            seperator_options={
+                "d_model" :512,
+                "n_head" : 8,
+                "num_layers" : [2,3]
+            }
+            model = AVLipreading_sep_unet( modality=args.modality,
+                        num_classes=args.num_classes,
+                        tcn_options=tcn_options,
+                        densetcn_options=densetcn_options,
+                        attention_options=attention_options,
+                        seperator_options = seperator_options,
+                        backbone_type=args.backbone_type,
+                        relu_type=args.relu_type,
+                        width_mult=args.width_mult,
+                        use_boundary=args.use_boundary,
+                        extract_feats=args.extract_feats
+                        )
+            calculateNorm2(model)
+            return model
         if args.transformer:
             seperator_options={
                 "d_model" :512,
