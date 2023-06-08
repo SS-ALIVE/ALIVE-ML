@@ -10,6 +10,7 @@ from lipreading.models.densetcn import DenseTemporalConvNet
 from lipreading.models.swish import Swish
 from lipreading.models.FCN import FCN
 from lipreading.models.ESPCN import ESPCN
+from lipreading.models.UNet import UNet
 import torchaudio.transforms as transforms
 from lipreading.dataset import audio_to_stft
 
@@ -165,6 +166,30 @@ class AVCrossAttention(nn.Module):
         # return av_attention, va_attention, a_self_attention,v_self_attention
         return av_feedforward, va_feedforward, a_feedforward, v_feedforward
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_seq_len):
+        super(PositionalEncoding, self).__init__()
+        self.d_model = d_model
+        self.max_seq_len = max_seq_len
+
+        # Create a matrix of shape (max_seq_len, d_model) to store the positional encodings
+        self.positional_encodings = self._generate_positional_encodings()
+
+    def _generate_positional_encodings(self):
+        pe = torch.zeros(self.max_seq_len, self.d_model)
+        position = torch.arange(0, self.max_seq_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * (-math.log(10000.0) / self.d_model))
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        return pe.unsqueeze(0)
+
+    def forward(self, x):
+        # Add positional encodings to the input tensor
+        x = x + self.positional_encodings[:, :x.size(1), :].to(x.device)
+        return x
+
 class CrossAttention(nn.Module):
     def __init__(self, embed_dim, num_heads):
         super(CrossAttention,self).__init__()
@@ -184,7 +209,7 @@ class CrossAttention(nn.Module):
 
 
     def forward(self, Q, K, V):
-        cross_attention = self.attention_layer_norm(self.cross_attention(Q, K, V)[0] + Q)
+        cross_attention = self.attention_layer_norm(self.cross_attention(Q, K, V)[0])
         # cross_attention = self.cross_attention(Q, K, V)[0] + Q
 
         
@@ -566,13 +591,16 @@ class Seperator_Block(nn.Module):
             nn.BatchNorm1d(d_model),
             Swish()
         )
+        self.positional_encodings = PositionalEncoding(d_model = d_model, max_seq_len = 30)
     def forward(self, x):
         audio,video = x
+        audio = self.positional_encodings(audio)
+        video = self.positional_encodings(video)
         encoded_audio = self.audio_encoder(audio)
         encoded_video = self.video_encoder(video)
         
-        av_attention = self.av_cross_attention(encoded_audio,encoded_video,encoded_audio) ## cross-attention , q,k,v -> value
-        va_attention = self.va_cross_attention(encoded_video,av_attention,encoded_video)
+        av_attention = self.av_cross_attention(encoded_video,encoded_audio,encoded_audio) ## cross-attention , q,k,v -> value
+        va_attention = self.va_cross_attention(av_attention,encoded_video,encoded_video)
         
         audio_out = torch.cat((encoded_audio,av_attention),dim=2) #b len feature -> b len feature 2 b len feature * 2
         video_out = torch.cat((encoded_video,va_attention),dim=2) #56 29 1024 56 1024 29
@@ -601,7 +629,6 @@ class AVSep(nn.Module):
         self.blocks = blocks
         self.seperator = seperator
         self.layers = self._make_layer(self.seperator,self.d_model,self.blocks,self.n_head)
-        self.attention = CrossAttention(d_model,n_head)
         
     # seperator[num_layer=2]  -> seperator[num_layer=4]*2  
     def _make_layer(self, transformer_block,d_model,blocks,n_head):
@@ -612,8 +639,8 @@ class AVSep(nn.Module):
     
     def forward(self,audio,video):
         audio,video = self.layers((audio,video)) # audio = (b,18560), video = (b,29,88,88) -> backbone(resnet) -> audio = (b,29,512) / video = (b,29,512)
-        attention_feature = self.attention(audio,video,audio)
-        return attention_feature
+        
+        return audio,video
 
 class AVLipreading_sep(nn.Module):
     def __init__( self, modality='av', hidden_dim=256, backbone_type='resnet', num_classes=500,
@@ -680,10 +707,11 @@ class AVLipreading_sep(nn.Module):
 
         self.spec_transform = audio_to_stft
 
-        #self.phase_FCN = FCN(feature_dim = 512) ##TODO need to specify how to pass feature dimension argument 
-        #self.amplitude_FCN = FCN(feature_dim = 512)
-        self.phase_ESPCN = ESPCN(feature_dim = seperator_options['d_model'])
-        self.amplitude_ESPCN = ESPCN(feature_dim = seperator_options['d_model'])
+        self.phase_FCN = FCN(feature_dim = 512) ##TODO need to specify how to pass feature dimension argument 
+        self.amplitude_FCN = FCN(feature_dim = 512)
+        self.attention = CrossAttention(seperator_options['d_model'], seperator_options['n_head'])
+        #self.phase_ESPCN = ESPCN(feature_dim = seperator_options['d_model'])
+        #self.amplitude_ESPCN = ESPCN(feature_dim = seperator_options['d_model'])
         #self.FCN = FCN(feature_dim = attention_options['embed_dim'] * 4) # 2 self_attention, 2 cross_attention
 
         # -- initialize
@@ -717,13 +745,137 @@ class AVLipreading_sep(nn.Module):
 
 
             ## transformer seperator
-            out = self.seperator(audio_data,video_data) # B, T, 512
+            audio, video = self.seperator(audio_data,video_data) # B, T, 512
+            attention_feature = self.attention(video,audio,audio)
             # print("out", out)
             out = self.consensus_func(out,audio_lengths,B) ##B,512
-            phase_feature = self.phase_ESPCN(out)
-            amplitude_feature = self.phase_ESPCN(out)
+            # phase_feature = self.phase_ESPCN(out)
+            # amplitude_feature = self.phase_ESPCN(out)
+            phase_feature = self.phase_FCN(out)
+            amplitude_feature = self.phase_FCN(out)
 
-            return phase_feature,amplitude_feature
+            return phase_feature.squeeze(), amplitude_feature.squeeze()
+            # b 512 -> b 4096 -> b 64 64 -> b 32 32 16-> b 16 16 64 -> b 8 8 256 -> nn.pixelshuffle b 128 128
+
+    def _initialize_weights_randomly(self):
+
+        use_sqrt = True
+
+        if use_sqrt:
+            def f(n):
+                return math.sqrt( 2.0/float(n) )
+        else:
+            def f(n):
+                return 2.0/float(n)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d) or isinstance(m, nn.Conv2d) or isinstance(m, nn.Conv1d):
+                n = np.prod( m.kernel_size ) * m.out_channels
+                m.weight.data.normal_(0, f(n))
+                if m.bias is not None:
+                    m.bias.data.zero_()
+
+            elif isinstance(m, nn.BatchNorm3d) or isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
+            elif isinstance(m, nn.Linear):
+                n = float(m.weight.data[0].nelement())
+                m.weight.data = m.weight.data.normal_(0, f(n))
+                
+class AVLipreading_sep_unet(nn.Module):
+    def __init__( self, modality='av', hidden_dim=256, backbone_type='resnet', num_classes=500,
+                  relu_type='prelu', tcn_options={}, densetcn_options={}, attention_options = {},seperator_options={}, width_mult=1.0,
+                  use_boundary=False, extract_feats=False):
+        super(AVLipreading_sep_unet, self).__init__()
+        self.extract_feats = extract_feats
+        self.backbone_type = backbone_type
+        self.modality = modality
+        self.use_boundary = use_boundary
+
+        #multi-modal
+        if self.modality == 'av':
+            self.frontend_nout = 1
+            self.backend_out = 512
+            self.audio_trunk = ResNet1D(BasicBlock1D, [2, 2, 2, 2], relu_type=relu_type) ## feature extraction with npz- > resnet?(audio). is it "best?"
+            if self.backbone_type == 'resnet':
+                self.frontend_nout = 64
+                self.backend_out = 512
+                self.video_trunk = ResNet(BasicBlock, [2, 2, 2, 2], relu_type=relu_type)
+            elif self.backbone_type == 'shufflenet':
+                assert width_mult in [0.5, 1.0, 1.5, 2.0], "Width multiplier not correct"
+                shufflenet = ShuffleNetV2( input_size=96, width_mult=width_mult)
+                self.video_trunk = nn.Sequential( shufflenet.features, shufflenet.conv_last, shufflenet.globalpool)
+                self.frontend_nout = 24
+                self.backend_out = 1024 if width_mult != 2.0 else 2048
+                self.stage_out_channels = shufflenet.stage_out_channels[-1]
+
+            # -- frontend3D
+            if relu_type == 'relu':
+                frontend_relu = nn.ReLU(True)
+            elif relu_type == 'prelu':
+                frontend_relu = nn.PReLU( self.frontend_nout )
+            elif relu_type == 'swish':
+                frontend_relu = Swish()
+
+            self.frontend3D = nn.Sequential(
+                        nn.Conv3d(1, self.frontend_nout, kernel_size=(5, 7, 7), stride=(1, 2, 2), padding=(2, 3, 3), bias=False),
+                        nn.BatchNorm3d(self.frontend_nout),
+                        frontend_relu,
+                        nn.MaxPool3d( kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1)))
+        else:
+            raise NotImplementedError
+
+        self.seperator_block = Seperator_Block
+        self.seperator = AVSep(
+            seperator = self.seperator_block,
+            d_model = seperator_options['d_model'],
+            n_head =  seperator_options['n_head'],
+            blocks = seperator_options['num_layers']
+            )
+        
+        self.consensus_func = _transposed_average_batch
+
+        self.spec_transform = audio_to_stft
+
+        self.UNet = UNet()
+
+        # -- initialize
+        self._initialize_weights_randomly()
+
+    def forward(self, audio_data, video_data, audio_lengths, video_lengths, audio_data_stft, boundaries=None):
+        if self.modality == "av":
+            
+            
+
+            # audio feature extraction
+            # (B,1,18560)
+            B, C, T = audio_data.size() ## audio is not normalized (-1,1)
+            audio_lengths = [audio_lengths[0]]*B
+            video_lengths = [video_lengths[0]]*B
+
+            audio_data = self.audio_trunk(audio_data)
+            audio_data = audio_data.transpose(1, 2) # (B, T, 512)
+            audio_lengths = [_//640 for _ in audio_lengths] 
+            
+            # video feature extraction
+            # (B,1, 29,88,88)
+            B, C, T, H, W = video_data.size()
+            video_data = self.frontend3D(video_data)
+            Tnew = video_data.shape[2]    # outpu should be B x C2 x Tnew x H x W
+            video_data = threeD_to_2D_tensor(video_data)
+            video_data = self.video_trunk(video_data) # (B, T, 512)
+
+            video_data = video_data.view(B, Tnew, video_data.size(1))
+
+
+            ## transformer seperator
+            audio, video = self.seperator(audio_data,video_data) # B, T, 512
+            av_feature = torch.cat([audio, video], dim=2)
+            
+            real, imag = self.UNet(audio_data_stft.transpose(1, 3), av_feature.transpose(1, 2))
+
+            return real.transpose(1, 2), imag.transpose(1, 2)
             # b 512 -> b 4096 -> b 64 64 -> b 32 32 16-> b 16 16 64 -> b 8 8 256 -> nn.pixelshuffle b 128 128
 
     def _initialize_weights_randomly(self):
