@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import torchaudio
 import json
-from lipreading.model import AVLipreading, AVLipreading_sep
+from lipreading.model import AVLipreading, AVLipreading_sep, AVLipreading_sep_unet
 from moviepy.editor import VideoFileClip, AudioFileClip
 def load_args(default_config=None):
     parser = argparse.ArgumentParser(description='Pytorch Lipreading ')
@@ -84,6 +84,11 @@ def load_args(default_config=None):
     parser.add_argument('--test-sample-path',type = str, default = './final.mp4', help = "path to save sample")
     parser.add_argument('--video-path',type=str,default='./test_video.mp4',help ="path to inference video")
     parser.add_argument('--transformer', default=False, action='store_true', help='use avsep ')
+
+    parser.add_argument('--unet', default=False, action='store_true', help="use unet")
+
+    # -- loss type
+    parser.add_argument('--loss-type', default="coordinate", type = str, help="loss type : phase or coordinate")
 
     args = parser.parse_args()
     return args
@@ -167,7 +172,7 @@ def video_preprocessing(video_path):
             face_roi = cv2.resize(face_roi,(88,88))
             video_frames.append(face_roi)
             # Display the face ROI
-            cv2.imshow('Face ROI', face_roi)
+            #cv2.imshow('Face ROI', face_roi)
         
             
             # Draw a rectangle around the face in the frame
@@ -176,8 +181,8 @@ def video_preprocessing(video_path):
         #cv2.imshow('Mouth ROI', frame)
 
         # Exit the loop if the 'q' key is pressed
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        # if cv2.waitKey(1) & 0xFF == ord('q'):
+        #     break
     #print(video_frame.shape)
     #print(audio_data.shape) ## [291643] --> [,16000] / 15*(640*29) + (640*20)
     #print(video_frame)
@@ -203,28 +208,43 @@ def video_preprocessing(video_path):
 
     return video_data,audio_data ## return processed video,audio data 
 
-def audio_to_stft(batch_data): ## returns short-time fourier transform value
-    stft = torch.stft(batch_data, n_fft = 256, hop_length = 145,return_complex=True,onesided=False)
 
-    return stft[:,:128,:128]
+def audio_to_stft(batch_data, n_fft, hop_length, return_complex, sequence_len): ## returns short-time fourier transform value
+    stft = torch.stft(batch_data, n_fft = n_fft, hop_length = hop_length,return_complex=return_complex, onesided=False)
+
+    return stft[:,:n_fft // 2,:sequence_len]
 
 def inference(model,video_data,audio_data):
     model.eval()
     audio_lengths =[18560]*(len(audio_data))
     video_lengths = [29]*(len(video_data))
 
-    audio_data_stft = audio_to_stft(audio_data).to(device)
+    audio_data_stft = audio_to_stft(audio_data,256,145,True,128).to(device) 
     audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
     audio_data = audio_data.unsqueeze(1).to(device) 
     video_data = video_data.unsqueeze(1).to(device)
     #print(audio_raw_stft.shape)
-    logits = model(audio_data,video_data, audio_lengths,video_lengths)
+    if args.unet:
+        audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29) # 
+        logits = model(audio_data,video_data, audio_lengths,video_lengths,audio_data_stft)
+    else:
+        logits = model(audio_data,video_data, audio_lengths,video_lengths)
     if args.transformer:
-        phase,amplitude = logits
-        #amplitude = torch.max(torch.abs(audio_data_stft)) * amplitude ## rescale amplitdue to original 
-        pred_mask = torch.polar(amplitude,phase * np.pi * 2)
-        reconstructed_waveform = torch.istft(torch.cat([audio_data_stft*pred_mask.squeeze(), torch.zeros(pred_mask.size(0), 1, pred_mask.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
-        return reconstructed_waveform
+        if args.loss_type == "phase":
+            phase,amplitude = logits
+            #amplitude = torch.max(torch.abs(audio_data_stft)) * amplitude ## rescale amplitdue to original 
+            pred_mask = torch.polar(amplitude,phase * np.pi * 2)
+            reconstructed_waveform = torch.istft(torch.cat([audio_data_stft*pred_mask.squeeze(), torch.zeros(pred_mask.size(0), 1, pred_mask.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
+            return reconstructed_waveform
+        else:
+            pred_real_mask, pred_imag_mask = logits
+            noise_real, noise_imag = torch.real(audio_data_stft), torch.imag(audio_data_stft)
+
+            pred_real, pred_imag = (noise_real * pred_real_mask) - (noise_imag * pred_imag_mask), (noise_real * pred_imag_mask) + (noise_imag * pred_real_mask)
+
+            pred_out = torch.complex(pred_real, pred_imag)
+            reconstructed_waveform = torch.istft(torch.cat([pred_out, torch.zeros(pred_out.size(0), 1, pred_out.size(2)).to(device)], dim=1).to(device),n_fft=1024,hop_length=640)
+            return reconstructed_waveform
     reconstructed_waveform = torch.istft(torch.cat([logits*torch.exp(1j*audio_data_angle), torch.zeros(logits.size(0), 1, logits.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
     #ouptut 
     # shell
@@ -272,6 +292,25 @@ def get_model_from_json():
             'num_heads' : args.attention_num_head,
             'dropout' : args.attention_dropout,
         }
+        if args.unet:
+            seperator_options={
+                "d_model" :512,
+                "n_head" : 8,
+                "num_layers" : [2,3]
+            }
+            model = AVLipreading_sep_unet( modality=args.modality,
+                        num_classes=args.num_classes,
+                        tcn_options=tcn_options,
+                        densetcn_options=densetcn_options,
+                        attention_options=attention_options,
+                        seperator_options = seperator_options,
+                        backbone_type=args.backbone_type,
+                        relu_type=args.relu_type,
+                        width_mult=args.width_mult,
+                        use_boundary=args.use_boundary,
+                        extract_feats=args.extract_feats
+                        )
+            return model
         if args.transformer:
             seperator_options={
                 "d_model" :512,
