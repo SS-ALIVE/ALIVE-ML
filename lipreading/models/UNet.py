@@ -55,7 +55,7 @@ class UNet(nn.Module):
         self.deconv1 = nn.ConvTranspose2d(4 + 4, 2, kernel_size=(1, 2), stride=(1, 2))
         self.bn1     = nn.BatchNorm2d(2)
         
-        self.sigmoid = nn.Sigmoid()
+        self.sigmoid = nn.Tanh()
 
 
 
@@ -84,10 +84,10 @@ class UNet(nn.Module):
         
         decoded_1 = self.bn1(self.swish(self.deconv1(torch.cat([decoded_2, encoded_1], dim=1)))) # 29 64 4+4 -> 29 128 2
         
+        stft_mask = decoded_1
+        # stft_mask = self.sigmoid(decoded_1)
         
-        stft_mask = self.sigmoid(decoded_1)
         
-        
-        return stft_mask[:, 0], stft_mask[:, 0]
+        return stft_mask[:, 0], stft_mask[:, 1]
     
 

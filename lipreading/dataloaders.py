@@ -57,20 +57,20 @@ def get_preprocessing_pipelines(modality):
         
 
         audio_preprocessing['train'] = Compose([
-                                    # AddAudioNoise(),
+                                    AddAudioNoise(),
                                     # AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
-                                    AddRandomNoise(noise=np.load('./data/babbleNoise_resample_16K.npy')),
+                                    #AddRandomNoise(noise=np.load('./data/babbleNoise_resample_16K.npy')),
                                     NormalizeUtterance()])
 
         audio_preprocessing['val'] = Compose([
                                     AddAudioNoise(),
-                                    AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
+                                    # AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
                                     NormalizeUtterance()])
 
         audio_preprocessing['test'] = Compose([
                                     AddAudioNoise(),
-                                    AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
-                                    AddRandomNoise(noise=np.load('./data/babbleNoise_resample_16K.npy')),
+                                    # AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
+                                    # AddRandomNoise(noise=np.load('./data/babbleNoise_resample_16K.npy')),
                                     NormalizeUtterance()])
 
 
