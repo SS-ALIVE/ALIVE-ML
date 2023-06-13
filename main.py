@@ -113,7 +113,6 @@ def load_args(default_config=None):
 
     # -- loss type
     parser.add_argument('--loss-type', default="coordinate", type = str, help="loss type : phase or coordinate")
-    
 
     args = parser.parse_args()
     return args
