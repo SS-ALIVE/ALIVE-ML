@@ -118,11 +118,12 @@ def video_preprocessing(video_path):
 
     ## face detector
     detector = dlib.get_frontal_face_detector()
-
+    mouth_predictor = dlib.shape_predictor('./shape_predictor_68_face_landmarks.dat')
     video = cv2.VideoCapture('./test_output.mp4')
     original_fps = video.get(cv2.CAP_PROP_FPS)
+    
 
-    audio_data = librosa.load('./test_output.mp4',sr=16000)[0][100:] ## load audio
+    audio_data = librosa.load(video_path,sr=16000)[0] ## load audio
     #print(audio_data.shape)
 
     #video.set(cv2.CAP_PROP_FPS, 240) ## set fps as 30
@@ -156,6 +157,7 @@ def video_preprocessing(video_path):
             face_count+=1
             # Extract the mouth region from the face bounding box
             x, y, w, h = face.left(), face.top(), face.width(), face.height()
+            
 
             roi_x = int(x + w / 2 - roi_w / 2)
             roi_y = int(y + h / 2 - roi_h / 2)
@@ -170,10 +172,29 @@ def video_preprocessing(video_path):
 
             # Extract the face ROI from the frame
             face_roi = frame[roi_y:roi_y_end, roi_x:roi_x_end]
-            face_roi = cv2.resize(face_roi,(88,88))
-            video_frames.append(face_roi)
+
+            landmarks = mouth_predictor(frame,face)
+            for j in range(68):
+                x, y = landmarks.part(j).x, landmarks.part(j).y
+                cv2.circle(frame, (x, y), 1, (0, 0, 255), -1)
+            mouth_points = landmarks.parts()[48:68]  # Assuming 68-point face landmark model
+            mouth_region = frame[min(mouth_points, key=lambda p: p.y).y:
+                            max(mouth_points, key=lambda p: p.y).y,
+                            min(mouth_points, key=lambda p: p.x).x:
+                            max(mouth_points, key=lambda p: p.x).x]
+            mouth_x = min(mouth_points,key = lambda p: p.x).x
+            mouth_y = min(mouth_points, key=lambda p: p.y).y
+            mouth_w = max(mouth_points, key=lambda p: p.x).x - mouth_x
+            mouth_h = max(mouth_points, key=lambda p: p.y).y - mouth_y
+
+            # Display the mouth region
+            #cv2.rectangle(frame,(mouth_x,mouth_y),(mouth_x+mouth_w,mouth_y+mouth_h),(0,255,0),2)
+            mouth_roi = cv2.resize(mouth_region,(88,88))
+            video_frames.append(mouth_roi)
+            #face_roi = cv2.resize(face_roi,(88,88))
+            #video_frames.append(face_roi)
             # Display the face ROI
-            #cv2.imshow('Face ROI', face_roi)
+            #cv2.imshow('Face ROI', fr)
         
             
             # Draw a rectangle around the face in the frame
@@ -183,14 +204,14 @@ def video_preprocessing(video_path):
 
         # Exit the loop if the 'q' key is pressed
         # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     break
+        #    break
     #print(video_frame.shape)
     #print(audio_data.shape) ## [291643] --> [,16000] / 15*(640*29) + (640*20)
     #print(video_frame)
     # Release the video capture and close all windows
     video.release()
     cv2.destroyAllWindows()
-    print("nimyeonsang!=",face_count)
+    print("detected face frame =",face_count)
 
     #make video processable (batch)
     video_frames = torch.tensor(np.array(video_frames)) ## [455,96,96] 
@@ -198,15 +219,19 @@ def video_preprocessing(video_path):
     mean = torch.mean(video_frames)
     std = torch.std(video_frames)
     normalized_video_frames = (video_frames - mean)/ std
-    batch_len = (len(video_frames)-1)//29 + 1
+    batch_len = (len(audio_data)-1)//18560 + 1
+    aud_pad_len = batch_len*18560 - len(audio_data)
+    audio_padding = torch.zeros(aud_pad_len)
+    audio_data = torch.cat((torch.tensor(audio_data),audio_padding)).reshape(batch_len,18560) 
+    
     vid_pad_len = batch_len*29-len(video_frames)
     video_padding = torch.zeros(vid_pad_len,88,88)
     video_data = torch.cat((normalized_video_frames,video_padding)).reshape(batch_len,29,88,88)
     
-    aud_pad_len = batch_len*18560 - len(audio_data)
-    audio_padding = torch.zeros(aud_pad_len)
-    audio_data = torch.cat((torch.tensor(audio_data),audio_padding)).reshape(batch_len,18560) 
-
+    
+    # print(aud_pad_len)
+    # print(audio_padding)
+    # print(audio_data.shape)
     return video_data,audio_data ## return processed video,audio data 
 
 def save_spectrogram(stft,path):
@@ -229,7 +254,7 @@ def inference(model,video_data,audio_data):
     audio_lengths =[18560]*(len(audio_data))
     video_lengths = [29]*(len(video_data))
 
-    audio_data_stft = audio_to_stft(audio_data,256,145,True,128).to(device) 
+    audio_data_stft = audio_to_stft(audio_data,256,145,False,128).to(device) 
     audio_data_angle = torch.angle(audio_data_stft).to(device) ## get angle from audio_data
     audio_data = audio_data.unsqueeze(1).to(device) 
     video_data = video_data.unsqueeze(1).to(device)
