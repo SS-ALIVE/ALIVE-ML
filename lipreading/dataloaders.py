@@ -68,7 +68,8 @@ def get_preprocessing_pipelines(modality):
                                     NormalizeUtterance()])
 
         audio_preprocessing['test'] = Compose([
-                                    AddAudioNoise(),
+                                    TestAddAudioNoise(), ## TODO temporal code
+                                    #AddAudioNoise(),
                                     # AddNoise( noise=np.load('./data/babbleNoise_resample_16K.npy')),
                                     # AddRandomNoise(noise=np.load('./data/babbleNoise_resample_16K.npy')),
                                     NormalizeUtterance()])

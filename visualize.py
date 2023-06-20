@@ -13,9 +13,301 @@ import torch
 import torch.nn as nn
 import torchaudio
 import json
-from lipreading.model import AVLipreading, AVLipreading_sep, AVLipreading_sep_unet
 from moviepy.editor import VideoFileClip, AudioFileClip
+from tqdm import tqdm
+import math
+import numpy as np
+from lipreading.models.resnet import ResNet, BasicBlock
+from lipreading.models.resnet1D import ResNet1D, BasicBlock1D
+from lipreading.models.shufflenetv2 import ShuffleNetV2
+from lipreading.models.tcn import MultibranchTemporalConvNet, TemporalConvNet
+from lipreading.models.densetcn import DenseTemporalConvNet
+from lipreading.models.swish import Swish
+from lipreading.models.FCN import FCN
+from lipreading.models.ESPCN import ESPCN
+from lipreading.models.UNet import UNet
+import torchaudio.transforms as transforms
+from lipreading.dataset import audio_to_stft
+from lipreading.dataloaders import get_data_loaders, get_preprocessing_pipelines, unit_test_data_loader
+from visdom import Visdom
+import numpy as np
+import math
+import os.path
+import numpy as np
+import umap
+import torch
 import matplotlib.pyplot as plt
+ 
+vis = Visdom()
+
+
+def _transposed_average_batch(x,lengths,B):
+    return torch.stack([torch.mean(x[index][0:i,:],0) for index,i in enumerate(lengths)],0)
+
+
+# -- auxiliary functions
+def threeD_to_2D_tensor(x):
+    n_batch, n_channels, s_time, sx, sy = x.shape
+    x = x.transpose(1, 2)
+    return x.reshape(n_batch*s_time, n_channels, sx, sy)
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_seq_len):
+        super(PositionalEncoding, self).__init__()
+        self.d_model = d_model
+        self.max_seq_len = max_seq_len
+
+        # Create a matrix of shape (max_seq_len, d_model) to store the positional encodings
+        self.positional_encodings = self._generate_positional_encodings()
+
+    def _generate_positional_encodings(self):
+        pe = torch.zeros(self.max_seq_len, self.d_model)
+        position = torch.arange(0, self.max_seq_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * (-math.log(10000.0) / self.d_model))
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        return pe.unsqueeze(0)
+
+    def forward(self, x):
+        # Add positional encodings to the input tensor
+        x = x + self.positional_encodings[:, :x.size(1), :].to(x.device)
+        return x
+
+class CrossAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads):
+        super(CrossAttention,self).__init__()
+
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+
+        self.cross_attention = nn.MultiheadAttention(embed_dim = self.embed_dim, num_heads = self.num_heads, batch_first=True) # cross-modality feature
+        self.attention_layer_norm = nn.LayerNorm(self.embed_dim)
+        
+        self.feedforward_layer = nn.Sequential(
+            nn.Linear(self.embed_dim, 2048),
+            Swish(),
+            nn.Linear(2048, self.embed_dim)
+        )
+        self.feedforward_layer_norm = nn.LayerNorm(self.embed_dim)
+
+
+    def forward(self, Q, K, V):
+        cross_attention = self.attention_layer_norm(self.cross_attention(Q, K, V)[0])
+        # cross_attention = self.cross_attention(Q, K, V)[0] + Q
+
+        
+        cross_feedforward = self.feedforward_layer_norm(self.feedforward_layer(cross_attention) + cross_attention)
+        # cross_feedforward = self.feedforward_layer(cross_attention) + cross_attention
+
+
+
+        # return av_attention, va_attention, a_self_attention,v_self_attention
+        return cross_feedforward
+
+class Seperator_Block(nn.Module):
+
+    def __init__(self, num_layers, d_model, n_head):
+        super(Seperator_Block, self).__init__()
+
+        #@# transfomer
+        self.audio_encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_head)
+        self.video_encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_head)
+        self.audio_encoder = nn.TransformerEncoder(self.audio_encoder_layer,num_layers=  num_layers)
+        self.video_encoder = nn.TransformerEncoder(self.video_encoder_layer,num_layers = num_layers)
+
+        self.av_cross_attention = CrossAttention(embed_dim = d_model, num_heads = n_head)
+        self.va_cross_attention = CrossAttention(embed_dim = d_model, num_heads = n_head)
+        self.audio_reduction = nn.Sequential( # 1024 512 1 56 29 1024
+            nn.Conv1d(d_model*2,d_model,kernel_size=1,stride=1,bias=False),
+            nn.BatchNorm1d(d_model),
+            Swish()
+        )
+        self.video_reduction = nn.Sequential(
+            nn.Conv1d(d_model*2,d_model,kernel_size=1,stride=1,bias=False),
+            nn.BatchNorm1d(d_model),
+            Swish()
+        )
+        self.positional_encodings = PositionalEncoding(d_model = d_model, max_seq_len = 30)
+    def forward(self, x):
+        audio,video = x
+        audio = self.positional_encodings(audio)
+        video = self.positional_encodings(video)
+        encoded_audio = self.audio_encoder(audio)
+        encoded_video = self.video_encoder(video)
+        
+        av_attention = self.av_cross_attention(encoded_video,encoded_audio,encoded_audio) ## cross-attention , q,k,v -> value
+        va_attention = self.va_cross_attention(av_attention,encoded_video,encoded_video)
+        
+        audio_out = torch.cat((encoded_audio,av_attention),dim=2) #b len feature -> b len feature 2 b len feature * 2
+        video_out = torch.cat((encoded_video,va_attention),dim=2) #56 29 1024 56 1024 29
+
+        audio_out = audio_out.transpose(1,2)
+        video_out = video_out.transpose(1,2)
+        audio_out = self.audio_reduction(audio_out)
+        video_out = self.video_reduction(video_out)
+        audio_out = audio_out.transpose(1,2)
+        video_out = video_out.transpose(1,2)
+        # print(audio_out)
+        # print(video_out)
+        # print(audio_out.shape,video_out.shape)
+        # exit()
+        audio_out = audio_out + audio # residual
+        video_out = video_out + video # residual
+
+        return audio_out,video_out
+
+class AVSep(nn.Module):
+
+    def __init__(self,seperator,d_model,n_head,blocks): # blocks = number of seperator blocks / blocks = [2,3]
+        super(AVSep,self).__init__()
+        self.d_model = d_model
+        self.n_head = n_head
+        self.blocks = blocks
+        self.seperator = seperator
+        self.layers = self._make_layer(self.seperator,self.d_model,self.blocks,self.n_head)
+        
+    # seperator[num_layer=2]  -> seperator[num_layer=4]*2  
+    def _make_layer(self, transformer_block,d_model,blocks,n_head):
+        layers = []
+        for num_layers in blocks:
+            layers.append(transformer_block(num_layers,d_model,n_head))
+        return nn.Sequential(*layers)
+    
+    def forward(self,audio,video):
+        audio,video = self.layers((audio,video)) # audio = (b,18560), video = (b,29,88,88) -> backbone(resnet) -> audio = (b,29,512) / video = (b,29,512)
+        
+        return audio,video
+
+
+class AVLipreading_sep_unet(nn.Module):
+    def __init__( self, modality='av', hidden_dim=256, backbone_type='resnet', num_classes=500,
+                  relu_type='prelu', tcn_options={}, densetcn_options={}, attention_options = {},seperator_options={}, width_mult=1.0,
+                  use_boundary=False, extract_feats=False):
+        super(AVLipreading_sep_unet, self).__init__()
+        self.extract_feats = extract_feats
+        self.backbone_type = backbone_type
+        self.modality = modality
+        self.use_boundary = use_boundary
+
+        #multi-modal
+        if self.modality == 'av':
+            self.frontend_nout = 1
+            self.backend_out = 512
+            self.audio_trunk = ResNet1D(BasicBlock1D, [2, 2, 2, 2], relu_type=relu_type) ## feature extraction with npz- > resnet?(audio). is it "best?"
+            if self.backbone_type == 'resnet':
+                self.frontend_nout = 64
+                self.backend_out = 512
+                self.video_trunk = ResNet(BasicBlock, [2, 2, 2, 2], relu_type=relu_type)
+            elif self.backbone_type == 'shufflenet':
+                assert width_mult in [0.5, 1.0, 1.5, 2.0], "Width multiplier not correct"
+                shufflenet = ShuffleNetV2( input_size=96, width_mult=width_mult)
+                self.video_trunk = nn.Sequential( shufflenet.features, shufflenet.conv_last, shufflenet.globalpool)
+                self.frontend_nout = 24
+                self.backend_out = 1024 if width_mult != 2.0 else 2048
+                self.stage_out_channels = shufflenet.stage_out_channels[-1]
+
+            # -- frontend3D
+            if relu_type == 'relu':
+                frontend_relu = nn.ReLU(True)
+            elif relu_type == 'prelu':
+                frontend_relu = nn.PReLU( self.frontend_nout )
+            elif relu_type == 'swish':
+                frontend_relu = Swish()
+
+            self.frontend3D = nn.Sequential(
+                        nn.Conv3d(1, self.frontend_nout, kernel_size=(5, 7, 7), stride=(1, 2, 2), padding=(2, 3, 3), bias=False),
+                        nn.BatchNorm3d(self.frontend_nout),
+                        frontend_relu,
+                        nn.MaxPool3d( kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1)))
+        else:
+            raise NotImplementedError
+
+        self.seperator_block = Seperator_Block
+        self.seperator = AVSep(
+            seperator = self.seperator_block,
+            d_model = seperator_options['d_model'],
+            n_head =  seperator_options['n_head'],
+            blocks = seperator_options['num_layers']
+            )
+        
+        self.consensus_func = _transposed_average_batch
+
+        self.spec_transform = audio_to_stft
+
+        self.UNet = UNet()
+
+        # -- initialize
+        self._initialize_weights_randomly()
+
+    def forward(self, audio_data, video_data, audio_lengths, video_lengths, audio_data_stft, audio_raw_data, boundaries=None):
+        if self.modality == "av":
+            
+        
+            # audio feature extraction
+            # (B,1,18560)
+            B, C, T = audio_data.size() ## audio is not normalized (-1,1)
+            audio_lengths = [audio_lengths[0]]*B
+            video_lengths = [video_lengths[0]]*B
+
+            audio_data = self.audio_trunk(audio_data)
+            audio_data = audio_data.transpose(1, 2) # (B, T, 512)
+            audio_lengths = [_//640 for _ in audio_lengths] 
+
+            audio_raw_data = self.audio_trunk(audio_raw_data.unsqueeze(1))
+            audio_raw_data = audio_raw_data.transpose(1, 2) # (B, T, 512)
+            audio_lengths = [_//640 for _ in audio_raw_data] 
+            
+            # video feature extraction
+            # (B,1, 29,88,88)
+            B, C, T, H, W = video_data.size()
+            video_data = self.frontend3D(video_data)
+            Tnew = video_data.shape[2]    # outpu should be B x C2 x Tnew x H x W
+            video_data = threeD_to_2D_tensor(video_data)
+            video_data = self.video_trunk(video_data) # (B, T, 512)
+
+            video_data = video_data.view(B, Tnew, video_data.size(1))
+
+
+            ## transformer seperator
+            audio, video = self.seperator(audio_data,video_data) # B, T, 512
+            # print("audio", audio[0])
+            # av_feature = torch.cat([audio, video], dim=2)
+            
+            # real, imag = self.UNet(audio_data_stft.transpose(1, 3), av_feature.transpose(1, 2))
+
+            return audio, audio_raw_data, audio_data, video
+            # b 512 -> b 4096 -> b 64 64 -> b 32 32 16-> b 16 16 64 -> b 8 8 256 -> nn.pixelshuffle b 128 128
+
+    def _initialize_weights_randomly(self):
+
+        use_sqrt = True
+
+        if use_sqrt:
+            def f(n):
+                return math.sqrt( 2.0/float(n) )
+        else:
+            def f(n):
+                return 2.0/float(n)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d) or isinstance(m, nn.Conv2d) or isinstance(m, nn.Conv1d):
+                n = np.prod( m.kernel_size ) * m.out_channels
+                m.weight.data.normal_(0, f(n))
+                if m.bias is not None:
+                    m.bias.data.zero_()
+
+            elif isinstance(m, nn.BatchNorm3d) or isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
+            elif isinstance(m, nn.Linear):
+                n = float(m.weight.data[0].nelement())
+                m.weight.data = m.weight.data.normal_(0, f(n))
+
+
+
 def load_args(default_config=None):
     parser = argparse.ArgumentParser(description='Pytorch Lipreading ')
     # -- dataset config
@@ -101,123 +393,9 @@ random.seed(1)
 torch.backends.cudnn.benchmark = True
 # device detection - cuda or cpu
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+gpu_num = torch.cuda.device_count()
 #device = "cpu"
 
-
-def video_preprocessing(video_path):
-
-    input_file = video_path
-    output_file = "./test_output.mp4"  # Path to the output video file
-    desired_frame_rate = 25  # Desired frame rate for the output video
-
-    # # FFmpeg command to change the frame rate
-    ffmpeg_command = f'ffmpeg -i {input_file} -filter:v fps=25 {output_file} -y' ## frame conversion
-
-    # # Execute the FFmpeg command
-    subprocess.call(ffmpeg_command, shell=True)
-
-    ## face detector
-    detector = dlib.get_frontal_face_detector()
-
-    video = cv2.VideoCapture('./test_output.mp4')
-    original_fps = video.get(cv2.CAP_PROP_FPS)
-
-    audio_data = librosa.load('./test_output.mp4',sr=16000)[0][100:] ## load audio
-    #print(audio_data.shape)
-
-    #video.set(cv2.CAP_PROP_FPS, 240) ## set fps as 30
-    roi_w,roi_h = 0,0
-    video_frames=deque()
-    frame_count=0
-    face_count = 0
-    while True:
-        # Read a frame
-        print(f'frame_count={len(video_frames)}, processing..')
-        # Break the loop if the video is finished
-        ret, frame = video.read()
-        frame_count+=1
-        if not ret:
-            break
-        # Convert the frame to grayscale for face detection
-        #frame = cv2.resize(frame,(500,500))
-
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # Detect faces in the grayscale frame
-        faces = detector(frame)
-        if len(faces)==0:
-            video_frames.append(cv2.resize(frame,(88,88)))
-            continue
-        if roi_w==0 and roi_h==0:
-            x, y, w, h = faces[0].left(), faces[0].top(), faces[0].width(), faces[0].height()
-            roi_w = w 
-            roi_h = h
-        # Iterate through the detected faces
-        for face in faces:
-            face_count+=1
-            # Extract the mouth region from the face bounding box
-            x, y, w, h = face.left(), face.top(), face.width(), face.height()
-
-            roi_x = int(x + w / 2 - roi_w / 2)
-            roi_y = int(y + h / 2 - roi_h / 2)
-            roi_width = roi_w
-            roi_height = roi_h
-
-            # Ensure the ROI coordinates are within the frame boundaries
-            roi_x = max(roi_x, 0)
-            roi_y = max(roi_y, 0)
-            roi_x_end = min(roi_x + roi_width, frame.shape[1])
-            roi_y_end = min(roi_y + roi_height, frame.shape[0])
-
-            # Extract the face ROI from the frame
-            face_roi = frame[roi_y:roi_y_end, roi_x:roi_x_end]
-            face_roi = cv2.resize(face_roi,(88,88))
-            video_frames.append(face_roi)
-            # Display the face ROI
-            #cv2.imshow('Face ROI', face_roi)
-        
-            
-            # Draw a rectangle around the face in the frame
-            #cv2.rectangle(frame, (roi_x, roi_y), (roi_x + roi_width, roi_y + roi_height), (0, 255, 0), 2)
-        # Display the frame
-        #cv2.imshow('Mouth ROI', frame)
-
-        # Exit the loop if the 'q' key is pressed
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     break
-    #print(video_frame.shape)
-    #print(audio_data.shape) ## [291643] --> [,16000] / 15*(640*29) + (640*20)
-    #print(video_frame)
-    # Release the video capture and close all windows
-    video.release()
-    cv2.destroyAllWindows()
-    print("nimyeonsang!=",face_count)
-
-    #make video processable (batch)
-    video_frames = torch.tensor(np.array(video_frames)) ## [455,96,96] 
-    video_frames = (video_frames) / 255.0
-    mean = torch.mean(video_frames)
-    std = torch.std(video_frames)
-    normalized_video_frames = (video_frames - mean)/ std
-    batch_len = (len(video_frames)-1)//29 + 1
-    vid_pad_len = batch_len*29-len(video_frames)
-    video_padding = torch.zeros(vid_pad_len,88,88)
-    video_data = torch.cat((normalized_video_frames,video_padding)).reshape(batch_len,29,88,88)
-    
-    aud_pad_len = batch_len*18560 - len(audio_data)
-    audio_padding = torch.zeros(aud_pad_len)
-    audio_data = torch.cat((torch.tensor(audio_data),audio_padding)).reshape(batch_len,18560) 
-
-    return video_data,audio_data ## return processed video,audio data 
-
-def save_spectrogram(stft,path):
-    plt.figure(figsize=(10, 10))
-    plt.imshow(stft[:512//2,:], aspect='auto', origin='lower')
-    plt.colorbar(format='%+2.0f dB')
-    plt.title('Spectrogram')
-    plt.xlabel('Time')
-    plt.ylabel('Frequency')
-    plt.tight_layout()
-    plt.savefig(path)
 
 def audio_to_stft(batch_data, n_fft, hop_length, return_complex, sequence_len): ## returns short-time fourier transform value
     stft = torch.stft(batch_data, n_fft = n_fft, hop_length = hop_length,return_complex=return_complex, onesided=False)
@@ -235,7 +413,7 @@ def inference(model,video_data,audio_data):
     video_data = video_data.unsqueeze(1).to(device)
     #print(audio_raw_stft.shape)
     if args.unet:
-        audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, False, 29) # 
+        audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29) # 
         logits = model(audio_data,video_data, audio_lengths,video_lengths,audio_data_stft)
     else:
         logits = model(audio_data,video_data, audio_lengths,video_lengths)
@@ -248,12 +426,11 @@ def inference(model,video_data,audio_data):
             return reconstructed_waveform
         else:
             pred_real_mask, pred_imag_mask = logits
-            noise_real, noise_imag = audio_data_stft[:,:,:,0], audio_data_stft[:,:,:,1]
-            # noise_real, noise_imag = torch.real(audio_data_stft), torch.imag(audio_data_stft)
+            noise_real, noise_imag = torch.real(audio_data_stft), torch.imag(audio_data_stft)
 
             pred_real, pred_imag = (noise_real * pred_real_mask) - (noise_imag * pred_imag_mask), (noise_real * pred_imag_mask) + (noise_imag * pred_real_mask)
 
-            pred_out = torch.complex(pred_real, pred_imag) * 1.5
+            pred_out = torch.complex(pred_real, pred_imag)
             reconstructed_waveform = torch.istft(torch.cat([pred_out, torch.zeros(pred_out.size(0), 1, pred_out.size(2)).to(device)], dim=1).to(device),n_fft=1024,hop_length=640)
             return reconstructed_waveform
     reconstructed_waveform = torch.istft(torch.cat([logits*torch.exp(1j*audio_data_angle), torch.zeros(logits.size(0), 1, logits.size(2)).to(device)], dim=1).to(device),n_fft=args.n_fft,hop_length=145)
@@ -389,23 +566,86 @@ def save_video(video_path,audio_path,save_path):
     video.write_videofile(save_path,codec="libx264",audio_codec="aac")
 
 
-
 def main():
+    
+
+    
     start = time.time()
     model = get_model_from_json()
     model = torch.nn.DataParallel(model)
     assert args.model_path, f"must specify model path."
     model = load_model(args.model_path,model,allow_size_mismatch=args.allow_size_mismatch)
     model.to(device)
-    print("model loaded!")
+    dset_loaders = get_data_loaders(args)['test']
+    for batch_idx, data in enumerate(tqdm(dset_loaders)):
+        audio_data,video_data,audio_lengths,video_lengths,audio_raw_data = data
+
+        audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(gpu_num))
+        video_lengths = [video_lengths[0]]*(len(video_lengths)//(gpu_num))
+        #temp = mel_transform(audio_data.detach()) 
+        
+        audio_data = audio_data.unsqueeze(1).to(device) 
+        video_data = video_data.unsqueeze(1).to(device)
+
+        audio_raw_stft = audio_to_stft(audio_raw_data, 1024, 640, False, 29).to(device)
+        audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29)
+        #print(audio_raw_stft.shape)
+        separated_audio, raw_audio, noised_audio_data, separated_video  = model(audio_data,video_data, audio_lengths,video_lengths, audio_data_stft, audio_raw_data)
+
+        reducer = umap.UMAP(n_components=2, n_neighbors=25, min_dist=0.5, metric="euclidean")
+
+        concated_feature = torch.cat([separated_audio[0], raw_audio[0], noised_audio_data[0]])
+
+        embedding = reducer.fit_transform(concated_feature.detach().cpu().numpy())
+        
+
+        separated_audio_embedding = embedding[:29]
+        print(separated_audio_embedding.shape)
+
+        raw_audio_embedding = embedding[29:58]
+        print(raw_audio_embedding.shape)
+
+        noise_audio_embedding = embedding[58:]
+        print(noise_audio_embedding.shape)
+
+        concated_embedding = np.concatenate([separated_audio_embedding, raw_audio_embedding, noise_audio_embedding])
+
+        print(concated_embedding.shape)
+
+        types = ['separated_audio_embedding'] * 29 + ['raw_audio_embedding'] * 29 + ['noise_audio_embedding'] * 29  # Type labels for each data point
+
+        # Define colors for each type
+        type_colors = {'separated_audio_embedding': [0,0,0], 'raw_audio_embedding': [100,0,0], 'noise_audio_embedding':[255,0,0]}
+
+        # Create a list of colors corresponding to each data point
+        colors = np.array([type_colors[t] for t in types])
+
+        # Create the scatter plot with different colors for each type
+        vis.scatter(
+            X=concated_embedding,
+            opts=dict(
+                title='Scatter Plot',
+                markersize=10,
+                xlabel='X',
+                ylabel='Y',
+                markercolor=colors,
+                legend=list(type_colors.keys()),  # Add the legend
+            )
+        )
+
+
+        print(separated_audio.shape)
+        print(separated_video.shape)
+        print(raw_audio.shape)
+
+                
+        return
+
     video_data,audio_data = video_preprocessing(args.video_path)
-    print(audio_data)
     reconstructed_waveform = inference(model,video_data,audio_data)
-    
     #print(reconstructed_waveform.shape)
     #print(reconstructed_waveform)
     cat=reconstructed_waveform.reshape(1,-1)
-    print(cat)
     #print(cat)
     torchaudio.save('./sample.wav',cat.detach().cpu(),16000)
     save_video('./test_output.mp4','./sample.wav',args.test_sample_path)

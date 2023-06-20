@@ -101,7 +101,7 @@ def load_args(default_config=None):
     parser.add_argument('--use-boundary', default=False, action='store_true', help='include hard border at the testing stage.')
     # -- Spectrogram config
     parser.add_argument('--spectrogram-hop-length', type=int, default=145, help='hop length of spectrogram')
-    parser.add_argument('--n-fft', type=int, default=256, help='n_fft for making spectrogram')
+    parser.add_argument('--n-fft', type=int, default=1024, help='n_fft for making spectrogram')
     parser.add_argument('--spectrogram-sample-rate', type=int, default=16000, help='sampling rate of spectrogram')
 
     # -- sample path
@@ -113,7 +113,8 @@ def load_args(default_config=None):
 
     # -- loss type
     parser.add_argument('--loss-type', default="coordinate", type = str, help="loss type : phase or coordinate")
-    
+    parser.add_argument('--audio-only',default=False, action='store_true',help='turn off audio in av model')
+
 
     args = parser.parse_args()
     return args
@@ -176,7 +177,7 @@ def mel_to_wav(mel): ##TODO something's wrong with this (backward propagation pr
 
 def save_spectrogram(stft,path):
     plt.figure(figsize=(10, 10))
-    plt.imshow(stft[:256,:], aspect='auto', origin='lower')
+    plt.imshow(stft[:args.n_fft//2,:], aspect='auto', origin='lower')
     plt.colorbar(format='%+2.0f dB')
     plt.title('Spectrogram')
     plt.xlabel('Time')
@@ -199,19 +200,25 @@ def multimodal_test(model,dset_loader,criterion): # TODO make it compatible with
     with torch.no_grad():
         for batch_idx, data in enumerate(tqdm(dset_loader)):
             audio_data,video_data,audio_lengths,video_lengths,audio_raw_data = data
-
-
+            
             # for multiple gpus
             audio_lengths = [audio_lengths[0]]*(len(audio_lengths)//(gpu_num))
             video_lengths = [video_lengths[0]]*(len(video_lengths)//(gpu_num))
             #temp = mel_transform(audio_data.detach()) 
             
-            audio_data = audio_data.unsqueeze(1).to(device) 
-            video_data = video_data.unsqueeze(1).to(device)
+            audio_data = audio_data.unsqueeze(1).to(device)
+            if args.audio_only: ## without video
+                #audio_data_zeros = torch.zeros_like(audio_data).to(device)
+                video_data = video_data.unsqueeze(1).to(device)
+                #video_data = (torch.zeros_like(video_data.unsqueeze(1))).to(device)
+            else:
+                print("this should not print")
+                video_data = video_data.unsqueeze(1).to(device)
             if args.unet:
+                
                 audio_raw_stft = audio_to_stft(audio_raw_data, 1024, 640, False, 29).to(device)
                 audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29)
-                #print(audio_raw_stft.shape)
+                print(audio_raw_stft.shape)
                 logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_data_stft)
                 audio_raw_stft = torch.complex(audio_raw_stft[:,:,:,0], audio_raw_stft[:,:,:,1])
 
@@ -286,8 +293,8 @@ def multimodal_test(model,dset_loader,criterion): # TODO make it compatible with
 
                     #print("reconstructed_waveform", reconstructed_waveform.shape)
                     #print("original_waveform", original_waveform.shape)
-                    running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
-                    running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
+                    #running_stoi += stoi_metric(reconstructed_waveform,original_waveform).item() ## TODO need to implement STOI calculation (mask-ground_truth)
+                    #running_pesq_wb += pesq_wb_metric(reconstructed_waveform,original_waveform).item()
                     #print("running_stoi=",running_stoi)
                     
                 else:
@@ -305,6 +312,8 @@ def multimodal_test(model,dset_loader,criterion): # TODO make it compatible with
                     #print("running_stoi=",running_stoi)
                     
             break
+
+        print(audio_data[3])
         ##audio data->wav # [b,18450]
         audio_data = audio_data.detach().cpu()
         reconstructed_waveform = reconstructed_waveform.detach().cpu()
@@ -316,7 +325,7 @@ def multimodal_test(model,dset_loader,criterion): # TODO make it compatible with
             logits=logits.detach().cpu()
         audio_raw_stft=audio_raw_stft.detach().cpu()
 
-        # test_list=torch.randperm(args.batch_size)
+        test_list=torch.randperm(args.batch_size)
         test_list = torch.tensor(range(15)) # for fixed result
         test_index = test_list[:15]
         test_path = args.test_sample_path
@@ -541,7 +550,9 @@ def multimodal_train(model, dset_loader, criterion, epoch, optimizer, logger):
         
         if args.unet:
             audio_raw_stft = audio_to_stft(audio_raw_data, 1024, 640, False, 29).to(device) # 
-            audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, True, 29)
+            print(audio_raw_stft.shape)
+            audio_data_stft = audio_to_stft(audio_data.squeeze(), 1024, 640, False, 29)
+            print(audio_data_stft[0])
             #print(audio_raw_stft.shape)
             logits = model(audio_data,video_data, audio_lengths,video_lengths, audio_data_stft)
             audio_raw_stft = torch.complex(audio_raw_stft[:,:,:,0], audio_raw_stft[:,:,:,1])

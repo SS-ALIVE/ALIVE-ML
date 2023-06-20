@@ -19,4 +19,10 @@
 #import torch
 #print(torch.randn(3,2).max())
 #print(torch.max(torch.randn(3,2)))
-print("conda")
+from moviepy.editor import VideoFileClip, AudioFileClip
+video = VideoFileClip("./happy.mp4")
+audio = AudioFileClip("./test_sample_1024_unet_coor/input_audio_1.wav")
+
+video = video.set_audio(audio)
+
+video.write_videofile("./not_happy2.mp4",codec="libx264",audio_codec="aac")

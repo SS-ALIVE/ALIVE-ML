@@ -70,7 +70,7 @@ class UNet(nn.Module):
         
         encoded_5 = self.block5(encoded_4) # 29 4 64 -> 29 1 256
         
-        
+        # av_feature = torch.zeros_like(av_feature)
         hidden_vector = torch.cat([encoded_5, av_feature.unsqueeze(-1)], dim=1)
 
         

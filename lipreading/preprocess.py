@@ -5,7 +5,7 @@ import os
 import random
 
 __all__ = ['Compose', 'Normalize', 'CenterCrop', 'RgbToGray', 'RandomCrop',
-           'HorizontalFlip', 'AddNoise', 'NormalizeUtterance', 'TimeMask', 'AddAudioNoise', 'AddRandomNoise']
+           'HorizontalFlip', 'AddNoise', 'NormalizeUtterance', 'TimeMask', 'AddAudioNoise', 'AddRandomNoise','TestAddAudioNoise']
 
 
 class Compose(object):
@@ -202,8 +202,43 @@ class AddAudioNoise(object):
         src_len = len(signal)
         noise_len = len(noise_data)
 
-        start_time = random.randint(-noise_len // 2, src_len // 2) # 겹치는 위치
+        # start_time = random.randint(-noise_len // 2, src_len // 2) # 겹치는 위치
+        start_time = 0
 
+        if start_time < 0:
+            noise_data = noise_data[-start_time:]
+            noise_data = np.pad(noise_data, (0, src_len-start_time-noise_len), mode='constant', constant_values = 0)
+        else:
+            noise_data = noise_data[:src_len - start_time]
+            noise_data = np.pad(noise_data, (start_time, 0), mode='constant', constant_values = 0)
+        
+        # noise의 크기 : 0~0.5 랜덤 값
+        noised_signal = signal * 0.5 + noise_data * 0.5
+        return noised_signal
+
+class TestAddAudioNoise(object): ## for test only
+    """Add another train audio as noise"""
+    # train 시에만 사용
+    def __init__(self):
+        pass
+
+    def __call__(self, signal):
+        # signal = signal['data'] # .npz to numpy array
+
+        # find a random noise file
+        folder_path = './datasets/audio_data/'
+        file_list = os.listdir(folder_path) 
+        noise_files = file_list[0] ## question
+        file_list = os.listdir(folder_path+noise_files+"/train/")
+        noise_file = file_list[0]
+        #print(noise_files,noise_file)
+        noise_data = np.load(folder_path+noise_files+"/train/"+noise_file)['data']
+
+        src_len = len(signal)
+        noise_len = len(noise_data)
+
+        #start_time = random.randint(-noise_len // 2, src_len // 2) # 겹치는 위치
+        start_time = 0
         if start_time < 0:
             noise_data = noise_data[-start_time:]
             noise_data = np.pad(noise_data, (0, src_len-start_time-noise_len), mode='constant', constant_values = 0)

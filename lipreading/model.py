@@ -591,11 +591,9 @@ class Seperator_Block(nn.Module):
             nn.BatchNorm1d(d_model),
             Swish()
         )
-        self.positional_encodings = PositionalEncoding(d_model = d_model, max_seq_len = 30)
+        
     def forward(self, x):
         audio,video = x
-        audio = self.positional_encodings(audio)
-        video = self.positional_encodings(video)
         encoded_audio = self.audio_encoder(audio)
         encoded_video = self.video_encoder(video)
         
@@ -617,7 +615,6 @@ class Seperator_Block(nn.Module):
         # exit()
         audio_out = audio_out + audio # residual
         video_out = video_out + video # residual
-
         return audio_out,video_out
 
 class AVSep(nn.Module):
@@ -629,7 +626,7 @@ class AVSep(nn.Module):
         self.blocks = blocks
         self.seperator = seperator
         self.layers = self._make_layer(self.seperator,self.d_model,self.blocks,self.n_head)
-        
+        self.positional_encodings = PositionalEncoding(d_model = d_model, max_seq_len = 30)
     # seperator[num_layer=2]  -> seperator[num_layer=4]*2  
     def _make_layer(self, transformer_block,d_model,blocks,n_head):
         layers = []
@@ -638,6 +635,8 @@ class AVSep(nn.Module):
         return nn.Sequential(*layers)
     
     def forward(self,audio,video):
+        audio = self.positional_encodings(audio)
+        video = self.positional_encodings(video)
         audio,video = self.layers((audio,video)) # audio = (b,18560), video = (b,29,88,88) -> backbone(resnet) -> audio = (b,29,512) / video = (b,29,512)
         
         return audio,video
@@ -786,7 +785,7 @@ class AVLipreading_sep(nn.Module):
 class AVLipreading_sep_unet(nn.Module):
     def __init__( self, modality='av', hidden_dim=256, backbone_type='resnet', num_classes=500,
                   relu_type='prelu', tcn_options={}, densetcn_options={}, attention_options = {},seperator_options={}, width_mult=1.0,
-                  use_boundary=False, extract_feats=False):
+                  use_boundary=False, extract_feats=False, visualize=False):
         super(AVLipreading_sep_unet, self).__init__()
         self.extract_feats = extract_feats
         self.backbone_type = backbone_type
@@ -846,7 +845,6 @@ class AVLipreading_sep_unet(nn.Module):
     def forward(self, audio_data, video_data, audio_lengths, video_lengths, audio_data_stft, boundaries=None):
         if self.modality == "av":
             
-            
 
             # audio feature extraction
             # (B,1,18560)
@@ -865,12 +863,13 @@ class AVLipreading_sep_unet(nn.Module):
             Tnew = video_data.shape[2]    # outpu should be B x C2 x Tnew x H x W
             video_data = threeD_to_2D_tensor(video_data)
             video_data = self.video_trunk(video_data) # (B, T, 512)
-
+            
             video_data = video_data.view(B, Tnew, video_data.size(1))
-
 
             ## transformer seperator
             audio, video = self.seperator(audio_data,video_data) # B, T, 512
+            
+            # print("audio", audio[0])
             av_feature = torch.cat([audio, video], dim=2)
             
             real, imag = self.UNet(audio_data_stft.transpose(1, 3), av_feature.transpose(1, 2))
@@ -903,3 +902,5 @@ class AVLipreading_sep_unet(nn.Module):
             elif isinstance(m, nn.Linear):
                 n = float(m.weight.data[0].nelement())
                 m.weight.data = m.weight.data.normal_(0, f(n))
+
+
